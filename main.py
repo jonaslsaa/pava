@@ -33,9 +33,17 @@ class Opcode(Enum):
     bipush = 0x10
     sipush = 0x11
     
+    i2f = 0x86
     iadd = 0x60
     imul = 0x68
     idiv = 0x6C
+    isub = 0x64
+    
+    f2i = 0x8B
+    fadd = 0x62
+    fsub = 0x66
+    fmul = 0x6A
+    fdiv = 0x6E
     
     iconst_0 = 0x3
     iconst_1 = 0x4
@@ -167,6 +175,10 @@ def parse_constant_pool(f, constant_pool_count) -> list:
         elif Constant.CONSTANT_MethodHandle == constant_tag:
             cp_info['reference_kind'] = parse_u1(f)
             cp_info['reference_index'] = parse_u2(f)
+        elif Constant.CONSTANT_Float == constant_tag:
+            cp_info['bytes'] = parse_u4(f)
+        elif Constant.CONSTANT_Integer == constant_tag:
+            cp_info['bytes'] = parse_u4(f)
         else:
             raise NotImplementedError(f"Unexpected constant tag {tag_byte} in class file.")
         cp_info['tag'] = constant_tag.name
@@ -320,6 +332,10 @@ def execute_code(clazz, code_attr):
                 v = get_cp(clazz, index)
                 if v['tag'] == Constant.CONSTANT_String.name:
                     frame.stack.append(Operand(type='reference', value=get_cp(clazz, index)))
+                elif v['tag'] == Constant.CONSTANT_Integer.name:
+                    frame.stack.append(Operand(type='int', value=v['bytes']))
+                elif v['tag'] == Constant.CONSTANT_Float.name:
+                    frame.stack.append(Operand(type='float', value=v['bytes']))
                 else:
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
@@ -366,6 +382,9 @@ def execute_code(clazz, code_attr):
             elif Opcode.sipush == opcode:
                 short = parse_u2(f)
                 frame.stack.append(Operand(type='int', value=short))
+            elif Opcode.i2f == opcode:
+                operand = pop_expected(frame.stack, 'int')
+                frame.stack.append(Operand(type='float', value=float(operand.value)))
             elif Opcode.iadd == opcode:
                 v2 = pop_expected(frame.stack, 'int')
                 v1 = pop_expected(frame.stack, 'int')
@@ -380,6 +399,29 @@ def execute_code(clazz, code_attr):
                 v2 = pop_expected(frame.stack, 'int')
                 v1 = pop_expected(frame.stack, 'int')
                 v3 = Operand(type='int', value=v1.value // v2.value)
+                frame.stack.append(v3)
+            elif Opcode.f2i == opcode:
+                operand = pop_expected(frame.stack, 'float')
+                frame.stack.append(Operand(type='int', value=int(operand.value)))
+            elif Opcode.fadd == opcode:
+                v2 = pop_expected(frame.stack, 'float')
+                v1 = pop_expected(frame.stack, 'float')
+                v3 = Operand(type='float', value=v1.value + v2.value)
+                frame.stack.append(v3)
+            elif Opcode.fsub == opcode:
+                v2 = pop_expected(frame.stack, 'float')
+                v1 = pop_expected(frame.stack, 'float')
+                v3 = Operand(type='float', value=v1.value - v2.value)
+                frame.stack.append(v3)
+            elif Opcode.fmul == opcode:
+                v2 = pop_expected(frame.stack, 'float')
+                v1 = pop_expected(frame.stack, 'float')
+                v3 = Operand(type='float', value=v1.value * v2.value)
+                frame.stack.append(v3)
+            elif Opcode.fdiv == opcode:
+                v2 = pop_expected(frame.stack, 'float')
+                v1 = pop_expected(frame.stack, 'float')
+                v3 = Operand(type='float', value=v1.value / v2.value)
                 frame.stack.append(v3)
             elif Opcode.istore_0 == opcode:
                 frame.local_vars[0] = pop_expected(frame.stack, 'int')
@@ -409,6 +451,10 @@ def execute_code(clazz, code_attr):
                 frame.stack.append(frame.local_vars[0])
             elif Opcode.fload_1 == opcode:
                 frame.stack.append(frame.local_vars[1])
+            elif Opcode.fload_2 == opcode:
+                frame.stack.append(frame.local_vars[2])
+            elif Opcode.fload_3 == opcode:
+                frame.stack.append(frame.local_vars[3])
             elif Opcode.iconst_0 == opcode:
                 frame.stack.append(Operand(type='int', value=0))
             elif Opcode.iconst_1 == opcode:

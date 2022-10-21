@@ -1,8 +1,7 @@
 public abstract class Main {
     public static void main(String[] args) {
         int x = 32;
-        int y = 64;
-        System.out.println("Hello World!");
+        float y = 16.0f;
         System.out.println(x + y);
     }
 }
