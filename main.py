@@ -81,6 +81,12 @@ method_access_flags : List[Tuple[str, int]] = [
     ("ACC_SYNTHETIC", 0x1000),
 ]
 
+
+class AttributeInfoName(Enum):
+    BOOTSTRAP_METHOD = b'BootstrapMethods'
+    INNER_CLASSES = b'InnerClasses'
+    SOURCE_FILE = b'SourceFile'
+
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
     return [name for (name, mask) in flags if (value & mask) != 0]
 
@@ -114,18 +120,19 @@ def parse_attributes(f, count) -> list:
 def parse_attributes_infos(clazz : dict):
     for attr in clazz['attributes']:
         attr_name_index = attr['attribute_name_index']
-        attr_name = get_cp(clazz, attr_name_index)['bytes']
+        attr_name = from_cp(clazz, attr_name_index)['bytes']
         attr_info_stream = io.BytesIO(attr['info'])
-        match attr_name:
-            case b'BootstrapMethods':
+        attr_info_type = AttributeInfoName(attr_name)
+        match attr_info_type:
+            case AttributeInfoName.BOOTSTRAP_METHOD:
                 attr['info'] = parse_attribute_info_BootstrapMethods(clazz, attr_info_stream)
-            case b'SourceFile':
+            case AttributeInfoName.SOURCE_FILE:
                 attr['info'] = parse_attribute_info_SourceFile(clazz, attr_info_stream)
-            case b'InnerClasses':
+            case AttributeInfoName.INNER_CLASSES:
                 attr['info'] = parse_attribute_info_InnerClasses(clazz, attr_info_stream)
             case _:
                 raise NotImplementedError(f'attribute {attr_name} is not implemented')
-        pprint(attr['info'])
+        attr['_name'] = attr_name
 
 def parse_attribute_info_BootstrapMethods(clazz : dict, f : io.BytesIO):
     attr = {}
@@ -161,16 +168,15 @@ def parse_attribute_info_InnerClasses(clazz : dict, f : io.BytesIO):
     attr['classes'] = classes
     return attr
 
-def print_constant_pool(constant_pool : dict):
+def print_constant_pool(constant_pool : dict, expand : bool = False):
     def expand_index(index):
         return constant_pool[index - 1]
     for i, cp_info in enumerate(constant_pool):
         expanded = {}
         for k, v in cp_info.items():
-            if k.endswith('_index'):
+            if k.endswith('_index') and expand:
                 expanded["__"+k[:-6]+"_"+str(v)] = expand_index(v)
-            else:
-                expanded[k] = v
+            expanded[k] = v
         print(i+1, expanded['tag'], end=": ")
         pprint(expanded)
     
@@ -318,9 +324,16 @@ def get_name_of_class(clazz, class_index: int) -> str:
 def get_name_of_member(clazz, name_and_type_index: int) -> str:
     return clazz['constant_pool'][clazz['constant_pool'][name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
-def get_cp(clazz : dict, index: int) -> dict:
+def from_cp(clazz : dict, index: int) -> dict:
     assert index > 0, "Constant pool index must be positive"
     return clazz['constant_pool'][index - 1]
+
+def from_bsm(clazz : dict, index: int) -> dict:
+    assert index >= 0, "Bootstrap method index must be non-negative"
+    for attr in clazz['attributes']: # should be cached, as it is the only bsm
+        if attr['_name'] == AttributeInfoName.BOOTSTRAP_METHOD.value:
+            return attr['info']['bootstrap_methods'][index]
+    raise RuntimeError("Bootstrap method not found")
 
 def pop_expected(stack : List[Operand], expected_type : OperandType):
     assert len(stack) > 0, "Stack underflow"
@@ -351,7 +364,7 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
                 index = parse_i2(f)
-                fieldref = get_cp(clazz, index)
+                fieldref = from_cp(clazz, index)
                 name_of_class = get_name_of_class(clazz, fieldref['class_index'])
                 name_of_member = get_name_of_member(clazz, fieldref['name_and_type_index'])
                 if name_of_class == 'java/lang/System' and name_of_member == 'out':
@@ -360,9 +373,9 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                     raise NotImplementedError(f"Unsupported member {name_of_class}/{name_of_member} in getstatic instruction")
             elif Opcode.ldc == opcode:
                 index = parse_i1(f)
-                v = get_cp(clazz, index)
+                v = from_cp(clazz, index)
                 if v['tag'] == Constant.CONSTANT_String.name:
-                    frame.stack.append(Operand(type=OperandType.REFERENCE, value=get_cp(clazz, index)))
+                    frame.stack.append(Operand(type=OperandType.REFERENCE, value=from_cp(clazz, index)))
                 elif v['tag'] == Constant.CONSTANT_Integer.name:
                     frame.stack.append(Operand(type=OperandType.INT, value=v['bytes']))
                 elif v['tag'] == Constant.CONSTANT_Float.name:
@@ -373,7 +386,7 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
                 index = parse_i2(f)
-                methodref = get_cp(clazz, index)
+                methodref = from_cp(clazz, index)
                 name_of_class = get_name_of_class(clazz, methodref['class_index'])
                 name_of_member = get_name_of_member(clazz, methodref['name_and_type_index']);
                 if name_of_class == 'java/io/PrintStream' and name_of_member == 'println':
@@ -386,7 +399,7 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                     arg = frame.stack[-1]
                     if arg.type == OperandType.REFERENCE:
                         if arg.value['tag'] == 'CONSTANT_String':
-                            constant_string = get_cp(clazz, arg.value['string_index'])['bytes']
+                            constant_string = from_cp(clazz, arg.value['string_index'])['bytes']
                             FakeStreamPrint(constant_string.decode('utf-8'))
                         else:
                             raise NotImplementedError(f"println for {arg.value['tag']} is not implemented")
@@ -404,12 +417,14 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                 cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
                 if not (parse_i1(f) == 0 and parse_i1(f) == 0):
                     raise RuntimeError("invokedynamic arguments are not 0")
-                dynamic_cp = get_cp(clazz, cp_index)
+                dynamic_cp = from_cp(clazz, cp_index)
                 assert dynamic_cp['tag'] == Constant.CONSTANT_InvokeDynamic.name, "invokedynamic index is not CONSTANT_InvokeDynamic"
-                bootstrap_method_attr = get_cp(clazz, dynamic_cp['bootstrap_method_attr_index'])
-                name_and_type = get_cp(clazz, dynamic_cp['name_and_type_index'])
+                bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
+                name_and_type = from_cp(clazz, dynamic_cp['name_and_type_index'])
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
+                
+                exit(0)
                 raise NotImplementedError("invokedynamic is not implemented")
             elif Opcode.bipush == opcode:
                 byte = parse_i1(f)
@@ -624,10 +639,13 @@ if __name__ == '__main__':
     [main] = find_methods_by_name(clazz, b'main')
     [code] = find_attributes_by_name(clazz, main['attributes'], b'Code')
     code_attribute = parse_code_info(code['info'])
-    #pprint(clazz)
-    #print_constant_pool(clazz['constant_pool'])
-    #print("\n---")
-    #exec_info = execute_code(clazz, code_attribute)
-    #print(f"Executed {exec_info.op_count} operations.")
-    print_constant_pool(clazz['constant_pool'])
+    
+    exec_info = execute_code(clazz, code_attribute)
+    print(f"Executed {exec_info.op_count} operations.")
+    
+    
+    print_constant_pool(clazz['constant_pool'], expand=False)
+    print('Attributes:')
     pprint(clazz['attributes'])
+    print('Methods:')
+    pprint(clazz['methods'])

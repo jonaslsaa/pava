@@ -3,3 +3,4 @@ __pycache__
 .vscode
 *.class
 *.pyc
+java.base/**/*.class
