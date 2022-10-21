@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from ast import match_case
 from dataclasses import dataclass
 import sys
 import io
@@ -32,12 +33,14 @@ class Opcode(Enum):
     op_return = 0xB1
     bipush = 0x10
     sipush = 0x11
+    nop = 0x0
     
     i2f = 0x86
     iadd = 0x60
     imul = 0x68
     idiv = 0x6C
     isub = 0x64
+    iinc = 0x84
     
     f2i = 0x8B
     fadd = 0x62
@@ -49,6 +52,9 @@ class Opcode(Enum):
     iconst_1 = 0x4
     iconst_2 = 0x5
     iconst_3 = 0x6
+    
+    lconst_0 = 0x9
+    lconst_1 = 0xa
     
     fconst_0 = 0xB
     fconst_1 = 0xC
@@ -77,6 +83,15 @@ class Opcode(Enum):
     astore_1 = 0x4C
     
     aload_1 = 0x2b
+    
+    # Control flow
+    if_icmpeq = 0x9F
+    if_icmpne = 0xA0
+    if_icmplt = 0xA1
+    if_icmpge = 0xA2
+    if_icmpgt = 0xA3
+    if_icmple = 0xA4
+    goto = 0xA7
 
 class_access_flags : List[Tuple[str, int]] = [
     ("ACC_PUBLIC"     , 0x0001),
@@ -107,10 +122,17 @@ method_access_flags : List[Tuple[str, int]] = [
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
     return [name for (name, mask) in flags if (value & mask) != 0]
 
-def parsei_u1(f): return int.from_bytes(f.read(1), 'big')
-def parsei_u2(f): return int.from_bytes(f.read(2), 'big')
-def parsei_u4(f): return int.from_bytes(f.read(4), 'big')
-def parsef_u4(f): return struct.unpack('>f', f.read(4))[0]
+def parse_u1(f):
+    return struct.unpack('>B', f.read(1))[0]
+def parse_i1(f): return int.from_bytes(f.read(1), 'big')
+def parse_i2(f): return int.from_bytes(f.read(2), 'big')
+def parse_i4(f): return int.from_bytes(f.read(4), 'big')
+def parse_f4(f): return struct.unpack('>f', f.read(4))[0]
+
+def u16_to_i16(v: int) -> int:
+    if v & 0x8000:
+        return v - 0x10000
+    return v
 
 def parse_attributes(f, count) -> list:
     attributes = []
@@ -121,8 +143,8 @@ def parse_attributes(f, count) -> list:
         #     u1 info[attribute_length];
         # }
         attribute = {}
-        attribute['attribute_name_index'] = parsei_u2(f)
-        attribute_length = parsei_u4(f)
+        attribute['attribute_name_index'] = parse_i2(f)
+        attribute_length = parse_i4(f)
         attribute['info'] = f.read(attribute_length)
         attributes.append(attribute)
     return attributes
@@ -148,37 +170,37 @@ def parse_constant_pool(f, constant_pool_count) -> list:
     constant_pool = []
     for i in range(constant_pool_count-1):
         cp_info = {}
-        tag_byte = parsei_u1(f)
+        tag_byte = parse_i1(f)
         try:
             constant_tag = Constant(tag_byte)
         except ValueError:
             raise NotImplementedError(f"Unknown constant tag {tag_byte} in class file.")
         if Constant.CONSTANT_Methodref == constant_tag:
-            cp_info['class_index'] = parsei_u2(f)
-            cp_info['name_and_type_index'] = parsei_u2(f)
+            cp_info['class_index'] = parse_i2(f)
+            cp_info['name_and_type_index'] = parse_i2(f)
         elif Constant.CONSTANT_Class == constant_tag:
-            cp_info['name_index'] = parsei_u2(f)
+            cp_info['name_index'] = parse_i2(f)
         elif Constant.CONSTANT_NameAndType == constant_tag:
-            cp_info['name_index'] = parsei_u2(f)
-            cp_info['descriptor_index'] = parsei_u2(f)
+            cp_info['name_index'] = parse_i2(f)
+            cp_info['descriptor_index'] = parse_i2(f)
         elif Constant.CONSTANT_Utf8 == constant_tag:
-            length = parsei_u2(f);
+            length = parse_i2(f);
             cp_info['bytes'] = f.read(length)
         elif Constant.CONSTANT_Fieldref == constant_tag:
-            cp_info['class_index'] = parsei_u2(f)
-            cp_info['name_and_type_index'] = parsei_u2(f)
+            cp_info['class_index'] = parse_i2(f)
+            cp_info['name_and_type_index'] = parse_i2(f)
         elif Constant.CONSTANT_String == constant_tag:
-            cp_info['string_index'] = parsei_u2(f)
+            cp_info['string_index'] = parse_i2(f)
         elif Constant.CONSTANT_InvokeDynamic == constant_tag:
-            cp_info['bootstrap_method_attr_index'] = parsei_u2(f)
-            cp_info['name_and_type_index'] = parsei_u2(f)
+            cp_info['bootstrap_method_attr_index'] = parse_i2(f)
+            cp_info['name_and_type_index'] = parse_i2(f)
         elif Constant.CONSTANT_MethodHandle == constant_tag:
-            cp_info['reference_kind'] = parsei_u1(f)
-            cp_info['reference_index'] = parsei_u2(f)
+            cp_info['reference_kind'] = parse_i1(f)
+            cp_info['reference_index'] = parse_i2(f)
         elif Constant.CONSTANT_Float == constant_tag:
-            cp_info['bytes'] = parsef_u4(f)
+            cp_info['bytes'] = parse_f4(f)
         elif Constant.CONSTANT_Integer == constant_tag:
-            cp_info['bytes'] = parsei_u4(f)
+            cp_info['bytes'] = parse_i4(f)
         else:
             raise NotImplementedError(f"Unexpected constant tag {tag_byte} in class file.")
         cp_info['tag'] = constant_tag.name
@@ -194,28 +216,28 @@ def parse_interfaces(f, interfaces_count):
 def parse_class_file(file_path):
     with open(file_path, "rb") as f:
         clazz = {}
-        clazz['magic'] = hex(parsei_u4(f))
+        clazz['magic'] = hex(parse_i4(f))
         if clazz['magic'] != '0xcafebabe':
             raise RuntimeError("Not a Java file: invalid magic number")
-        clazz['minor'] = parsei_u2(f)
-        clazz['major'] = parsei_u2(f)
+        clazz['minor'] = parse_i2(f)
+        clazz['major'] = parse_i2(f)
         
-        constant_pool_count = parsei_u2(f)
+        constant_pool_count = parse_i2(f)
         clazz['constant_pool'] = parse_constant_pool(f, constant_pool_count)
         
-        clazz['access_flags'] = parse_flags(parsei_u2(f), class_access_flags)
-        clazz['this_class'] = parsei_u2(f)
-        clazz['super_class'] = parsei_u2(f)
+        clazz['access_flags'] = parse_flags(parse_i2(f), class_access_flags)
+        clazz['this_class'] = parse_i2(f)
+        clazz['super_class'] = parse_i2(f)
         
-        interfaces_count = parsei_u2(f)
+        interfaces_count = parse_i2(f)
         interfaces = parse_interfaces(f, interfaces_count)
         clazz['interfaces'] = interfaces
-        fields_count = parsei_u2(f)
+        fields_count = parse_i2(f)
         fields = []
         for i in range(fields_count):
             raise NotImplementedError("We don't support fields")
         clazz['fields'] = fields
-        methods_count = parsei_u2(f)
+        methods_count = parse_i2(f)
         methods = []
         for i in range(methods_count):
             # u2             access_flags;
@@ -224,14 +246,14 @@ def parse_class_file(file_path):
             # u2             attributes_count;
             # attribute_info attributes[attributes_count];
             method = {}
-            method['access_flags'] = parse_flags(parsei_u2(f), method_access_flags)
-            method['name_index'] = parsei_u2(f)
-            method['descriptor_index'] = parsei_u2(f)
-            attributes_count = parsei_u2(f)
+            method['access_flags'] = parse_flags(parse_i2(f), method_access_flags)
+            method['name_index'] = parse_i2(f)
+            method['descriptor_index'] = parse_i2(f)
+            attributes_count = parse_i2(f)
             method['attributes'] = parse_attributes(f, attributes_count)
             methods.append(method)
         clazz['methods'] = methods
-        attributes_count = parsei_u2(f)
+        attributes_count = parse_i2(f)
         clazz['attributes'] = parse_attributes(f, attributes_count)
         return clazz
 
@@ -264,14 +286,14 @@ def parse_code_info(info: bytes) -> dict:
         #     u2 attributes_count;
         #     attribute_info attributes[attributes_count];
         # }
-        code_attribute['max_stack'] = parsei_u2(f)
-        code_attribute['max_locals'] = parsei_u2(f)
-        code_length = parsei_u4(f)
+        code_attribute['max_stack'] = parse_i2(f)
+        code_attribute['max_locals'] = parse_i2(f)
+        code_length = parse_i4(f)
         code_attribute['code'] = f.read(code_length)
-        exception_table_length = parsei_u2(f)
+        exception_table_length = parse_i2(f)
         for i in range(exception_table_length):
             raise NotImplementedError("We don't support exception tables")
-        attributes_count = parsei_u2(f)
+        attributes_count = parse_i2(f)
         code_attribute['attributes'] = parse_attributes(f, attributes_count)
         # NOTE: parsing the code attribute is not finished
         return code_attribute
@@ -290,6 +312,7 @@ def get_cp(clazz : dict, index: int) -> dict:
     return clazz['constant_pool'][index - 1]
 
 def pop_expected(stack : list, expected_type : str):
+    assert len(stack) > 0, "Stack underflow"
     if stack[-1].type != expected_type:
         raise RuntimeError(f"Expected {expected_type} on stack, but found {stack[-1].type}")
     return stack.pop()
@@ -310,16 +333,16 @@ def execute_code(clazz, code_attr):
                   local_vars=[None] * code_attr['max_locals'])
     with io.BytesIO(code) as f:
         while f.tell() < len(code):
-            opcode_byte = parsei_u1(f)
+            opcode_byte = parse_i1(f)
             try:
                 opcode = Opcode(opcode_byte)
                 print(f.tell(), "OP_" + opcode.name)
             except ValueError:
-                #print("Stack")
-                #pprint(frame.stack)
+                print("Stack trace:")
+                pprint(frame.stack)
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
-                index = parsei_u2(f)
+                index = parse_i2(f)
                 fieldref = get_cp(clazz, index)
                 name_of_class = get_name_of_class(clazz, fieldref['class_index'])
                 name_of_member = get_name_of_member(clazz, fieldref['name_and_type_index'])
@@ -328,7 +351,7 @@ def execute_code(clazz, code_attr):
                 else:
                     raise NotImplementedError(f"Unsupported member {name_of_class}/{name_of_member} in getstatic instruction")
             elif Opcode.ldc == opcode:
-                index = parsei_u1(f)
+                index = parse_i1(f)
                 v = get_cp(clazz, index)
                 if v['tag'] == Constant.CONSTANT_String.name:
                     frame.stack.append(Operand(type='reference', value=get_cp(clazz, index)))
@@ -341,7 +364,7 @@ def execute_code(clazz, code_attr):
                 else:
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
-                index = parsei_u2(f)
+                index = parse_i2(f)
                 methodref = get_cp(clazz, index)
                 name_of_class = get_name_of_class(clazz, methodref['class_index'])
                 name_of_member = get_name_of_member(clazz, methodref['name_and_type_index']);
@@ -368,10 +391,10 @@ def execute_code(clazz, code_attr):
                 else:
                     raise NotImplementedError(f"Unknown method {name_of_class}/{name_of_member} in invokevirtual instruction")
             elif Opcode.invokedynamic == opcode:
-                arg1 = parsei_u1(f)
-                arg2 = parsei_u1(f)
+                arg1 = parse_i1(f)
+                arg2 = parse_i1(f)
                 cp_index = (arg1 << 8) + arg2
-                if not (parsei_u1(f) == 0 and parsei_u1(f) == 0):
+                if not (parse_i1(f) == 0 and parse_i1(f) == 0):
                     raise RuntimeError("invokedynamic arguments are not 0")
                 dynamic_cp = get_cp(clazz, cp_index)
                 pprint(code_attr)
@@ -379,10 +402,10 @@ def execute_code(clazz, code_attr):
             elif Opcode.op_return == opcode:
                 return
             elif Opcode.bipush == opcode:
-                byte = parsei_u1(f)
+                byte = parse_i1(f)
                 frame.stack.append(Operand(type='int', value=byte))
             elif Opcode.sipush == opcode:
-                short = parsei_u2(f)
+                short = parse_i2(f)
                 frame.stack.append(Operand(type='int', value=short))
             elif Opcode.i2f == opcode:
                 operand = pop_expected(frame.stack, 'int')
@@ -465,6 +488,10 @@ def execute_code(clazz, code_attr):
                 frame.stack.append(Operand(type='int', value=2))
             elif Opcode.iconst_3 == opcode:
                 frame.stack.append(Operand(type='int', value=3))
+            elif Opcode.lconst_0 == opcode:
+                frame.stack.append(Operand(type='long', value=0))
+            elif Opcode.lconst_1 == opcode:
+                frame.stack.append(Operand(type='long', value=1))
             elif Opcode.fconst_0 == opcode:
                 frame.stack.append(Operand(type='float', value=0.0))
             elif Opcode.fconst_1 == opcode:
@@ -479,6 +506,51 @@ def execute_code(clazz, code_attr):
                 objectref = frame.local_vars[1]
                 assert objectref.type == 'reference', f"Expected reference, but got {objectref.type}"
                 frame.stack.append(objectref)
+                '''
+                if_icmpeq = 0x9F
+                if_icmpne = 0xA0
+                if_icmplt = 0xA1
+                if_icmpge = 0xA2
+                if_icmpgt = 0xA3
+                if_icmple = 0xA4
+                '''
+            elif Opcode.iinc == opcode:
+                index = parse_i1(f)
+                const = parse_i1(f)
+                frame.local_vars[index].value += const
+            elif opcode in (Opcode.if_icmpeq, Opcode.if_icmpne, Opcode.if_icmplt, Opcode.if_icmpge, Opcode.if_icmpgt, Opcode.if_icmple):
+                v2 = pop_expected(frame.stack, 'int')
+                v1 = pop_expected(frame.stack, 'int')
+                branchbyte1 = parse_u1(f) # unsigned byte
+                branchbyte2 = parse_u1(f)
+                do_branch = False
+                match opcode:
+                    case Opcode.if_icmpeq:
+                        if v1.value == v2.value: do_branch = True
+                    case Opcode.if_icmpne:
+                        if v1.value != v2.value: do_branch = True
+                    case Opcode.if_icmplt:
+                        if v1.value < v2.value: do_branch = True
+                    case Opcode.if_icmpge:
+                        if v1.value >= v2.value: do_branch = True
+                    case Opcode.if_icmpgt:
+                        if v1.value > v2.value: do_branch = True
+                    case Opcode.if_icmple:
+                        if v1.value <= v2.value: do_branch = True
+                    case _:
+                        raise Exception(f"Unknown if_icmp<cond> {opcode}")
+                if do_branch:
+                    branch_offset = u16_to_i16(branchbyte1 << 8 | branchbyte2)
+                    actual_offset = branch_offset - 3 # because we already read 3 bytes
+                    f.seek(actual_offset, 1) # 1 means relative to current position
+            elif Opcode.goto == opcode:
+                branchbyte1 = parse_u1(f) # unsigned byte
+                branchbyte2 = parse_u1(f)
+                branch_offset = u16_to_i16(branchbyte1 << 8 | branchbyte2)
+                actual_offset = branch_offset - 3
+                f.seek(actual_offset, 1)
+            elif Opcode.nop == opcode:
+                pass
             else:
                 raise NotImplementedError(f"Opcode {opcode} is not implemented")
             
