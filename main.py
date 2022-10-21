@@ -44,6 +44,15 @@ class ArrayTypeCode(Enum):
     T_INT = 10
     T_LONG = 11
 
+@dataclass
+class ExecutionReturnInfo:
+    op_count : int
+
+@dataclass(frozen=True, slots=True)
+class Operand:
+    type : OperandType
+    value : Any
+
 class_access_flags : List[Tuple[str, int]] = [
     ("ACC_PUBLIC"     , 0x0001),
     ("ACC_FINAL"      , 0x0010),
@@ -73,12 +82,12 @@ method_access_flags : List[Tuple[str, int]] = [
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
     return [name for (name, mask) in flags if (value & mask) != 0]
 
-def parse_u1(f):
+def parse_u1(f : io.BytesIO):
     return struct.unpack('>B', f.read(1))[0]
-def parse_i1(f): return int.from_bytes(f.read(1), 'big')
-def parse_i2(f): return int.from_bytes(f.read(2), 'big')
-def parse_i4(f): return int.from_bytes(f.read(4), 'big')
-def parse_f4(f): return struct.unpack('>f', f.read(4))[0]
+def parse_i1(f : io.BytesIO) -> int: return int.from_bytes(f.read(1), 'big')
+def parse_i2(f : io.BytesIO) -> int: return int.from_bytes(f.read(2), 'big')
+def parse_i4(f : io.BytesIO) -> int: return int.from_bytes(f.read(4), 'big')
+def parse_f4(f : io.BytesIO) -> int: return struct.unpack('>f', f.read(4))[0]
 
 def u16_to_i16(v: int) -> int:
     if v & 0x8000:
@@ -99,9 +108,6 @@ def parse_attributes(f, count) -> list:
         attribute['info'] = f.read(attribute_length)
         attributes.append(attribute)
     return attributes
-
-
-        
 
 def print_constant_pool(constant_pool : dict):
     def expand_index(index):
@@ -262,28 +268,18 @@ def get_name_of_member(clazz, name_and_type_index: int) -> str:
 def get_cp(clazz : dict, index: int) -> dict:
     return clazz['constant_pool'][index - 1]
 
-def pop_expected(stack : list, expected_type : OperandType):
+def pop_expected(stack : List[Operand], expected_type : OperandType):
     assert len(stack) > 0, "Stack underflow"
     if stack[-1].type != expected_type:
         raise RuntimeError(f"Expected {expected_type} on stack, but found {stack[-1].type}")
     return stack.pop()
-
-
-@dataclass
-class ExecutionReturnInfo:
-    op_count : int
-
-@dataclass
-class Operand:
-    type : OperandType
-    value : Any
 
 @dataclass
 class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_code(clazz, code_attr) -> ExecutionReturnInfo:
+def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
     code = code_attr['code']
     frame = Frame(stack=[],
                   local_vars=[None] * code_attr['max_locals'])
@@ -479,7 +475,7 @@ def execute_code(clazz, code_attr) -> ExecutionReturnInfo:
             elif Opcode.iinc == opcode:
                 index = parse_i1(f)
                 const = parse_i1(f)
-                frame.local_vars[index].value += const
+                frame.local_vars[index] = Operand(type=OperandType.INT, value=frame.local_vars[index].value + const)
             elif opcode in (Opcode.if_icmpeq, Opcode.if_icmpne, Opcode.if_icmplt, Opcode.if_icmpge, Opcode.if_icmpgt, Opcode.if_icmple):
                 v2 = pop_expected(frame.stack, OperandType.INT)
                 v1 = pop_expected(frame.stack, OperandType.INT)
