@@ -42,15 +42,29 @@ class Opcode(Enum):
     iconst_2 = 0x5
     iconst_3 = 0x6
     
+    fconst_0 = 0xB
+    fconst_1 = 0xC
+    fconst_2 = 0xD
+    
     istore_0 = 0x3B
     istore_1 = 0x3C
     istore_2 = 0x3D
     istore_3 = 0x3E
     
+    fstore_0 = 0x43
+    fstore_1 = 0x44
+    fstore_2 = 0x45
+    fstore_3 = 0x46
+    
     iload_0 = 0x1A
     iload_1 = 0x1B
     iload_2 = 0x1C
     iload_3 = 0x1D
+    
+    fload_0 = 0x22
+    fload_1 = 0x23
+    fload_2 = 0x24
+    fload_3 = 0x25
     
     astore_1 = 0x4C
     
@@ -251,6 +265,9 @@ def parse_code_info(info: bytes) -> dict:
         return code_attribute
 
 
+def FakeStreamPrint(s: str):
+    print(">", s)
+
 def get_name_of_class(clazz, class_index: int) -> str:
     return clazz['constant_pool'][clazz['constant_pool'][class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
@@ -259,6 +276,11 @@ def get_name_of_member(clazz, name_and_type_index: int) -> str:
 
 def get_cp(clazz : dict, index: int) -> dict:
     return clazz['constant_pool'][index - 1]
+
+def pop_expected(stack : list, expected_type : str):
+    if stack[-1].type != expected_type:
+        raise RuntimeError(f"Expected {expected_type} on stack, but found {stack[-1].type}")
+    return stack.pop()
 
 @dataclass
 class Operand:
@@ -271,18 +293,18 @@ class Frame:
     local_vars: list
 
 def execute_code(clazz, code_attr):
+    code = code_attr['code']
     frame = Frame(stack=[],
                   local_vars=[None] * code_attr['max_locals'])
-    code = code_attr['code']
     with io.BytesIO(code) as f:
         while f.tell() < len(code):
             opcode_byte = parse_u1(f)
             try:
                 opcode = Opcode(opcode_byte)
-                print(f.tell(), "OP", opcode.name)
+                print(f.tell(), "OP_" + opcode.name)
             except ValueError:
-                print("Stack")
-                pprint(frame.stack)
+                #print("Stack")
+                #pprint(frame.stack)
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
                 index = parse_u2(f)
@@ -315,11 +337,14 @@ def execute_code(clazz, code_attr):
                     arg = frame.stack[-1]
                     if arg.type == 'reference':
                         if arg.value['tag'] == 'CONSTANT_String':
-                            print(get_cp(clazz, arg.value['string_index'])['bytes'].decode('utf-8'))
+                            constant_string = get_cp(clazz, arg.value['string_index'])['bytes']
+                            FakeStreamPrint(constant_string.decode('utf-8'))
                         else:
                             raise NotImplementedError(f"println for {arg.value['tag']} is not implemented")
                     elif arg.type == 'int':
-                        print(f"{arg.value}")
+                        FakeStreamPrint(str(arg.value))
+                    elif arg.type == 'float':
+                        FakeStreamPrint(str(arg.value))
                     else:
                         raise NotImplementedError(f"Support for {arg.type} is not implemented")
                 else:
@@ -342,28 +367,36 @@ def execute_code(clazz, code_attr):
                 short = parse_u2(f)
                 frame.stack.append(Operand(type='int', value=short))
             elif Opcode.iadd == opcode:
-                v2 = frame.stack.pop()
-                v1 = frame.stack.pop()
+                v2 = pop_expected(frame.stack, 'int')
+                v1 = pop_expected(frame.stack, 'int')
                 v3 = Operand(type='int', value=v1.value + v2.value)
                 frame.stack.append(v3)
             elif Opcode.imul == opcode:
-                v2 = frame.stack.pop()
-                v1 = frame.stack.pop()
+                v2 = pop_expected(frame.stack, 'int')
+                v1 = pop_expected(frame.stack, 'int')
                 v3 = Operand(type='int', value=v1.value * v2.value)
                 frame.stack.append(v3)
             elif Opcode.idiv == opcode:
-                v2 = frame.stack.pop()
-                v1 = frame.stack.pop()
+                v2 = pop_expected(frame.stack, 'int')
+                v1 = pop_expected(frame.stack, 'int')
                 v3 = Operand(type='int', value=v1.value // v2.value)
                 frame.stack.append(v3)
             elif Opcode.istore_0 == opcode:
-                frame.local_vars[0] = frame.stack.pop()
+                frame.local_vars[0] = pop_expected(frame.stack, 'int')
             elif Opcode.istore_1 == opcode:
-                frame.local_vars[1] = frame.stack.pop()
+                frame.local_vars[1] = pop_expected(frame.stack, 'int')
             elif Opcode.istore_2 == opcode:
-                frame.local_vars[2] = frame.stack.pop()
+                frame.local_vars[2] = pop_expected(frame.stack, 'int')
             elif Opcode.istore_3 == opcode:
-                frame.local_vars[3] = frame.stack.pop()
+                frame.local_vars[3] = pop_expected(frame.stack, 'int')
+            elif Opcode.fstore_0 == opcode:
+                frame.local_vars[0] = pop_expected(frame.stack, 'float')
+            elif Opcode.fstore_1 == opcode:
+                frame.local_vars[1] = pop_expected(frame.stack, 'float')
+            elif Opcode.fstore_2 == opcode:
+                frame.local_vars[2] = pop_expected(frame.stack, 'float')
+            elif Opcode.fstore_3 == opcode:
+                frame.local_vars[3] = pop_expected(frame.stack, 'float')
             elif Opcode.iload_0 == opcode:
                 frame.stack.append(frame.local_vars[0])
             elif Opcode.iload_1 == opcode:
@@ -372,6 +405,10 @@ def execute_code(clazz, code_attr):
                 frame.stack.append(frame.local_vars[2])
             elif Opcode.iload_3 == opcode:
                 frame.stack.append(frame.local_vars[3])
+            elif Opcode.fload_0 == opcode:
+                frame.stack.append(frame.local_vars[0])
+            elif Opcode.fload_1 == opcode:
+                frame.stack.append(frame.local_vars[1])
             elif Opcode.iconst_0 == opcode:
                 frame.stack.append(Operand(type='int', value=0))
             elif Opcode.iconst_1 == opcode:
@@ -380,6 +417,12 @@ def execute_code(clazz, code_attr):
                 frame.stack.append(Operand(type='int', value=2))
             elif Opcode.iconst_3 == opcode:
                 frame.stack.append(Operand(type='int', value=3))
+            elif Opcode.fconst_0 == opcode:
+                frame.stack.append(Operand(type='float', value=0.0))
+            elif Opcode.fconst_1 == opcode:
+                frame.stack.append(Operand(type='float', value=1.0))
+            elif Opcode.fconst_2 == opcode:
+                frame.stack.append(Operand(type='float', value=2.0))
             elif Opcode.astore_1 == opcode:
                 objectref = frame.stack.pop()
                 assert objectref.type in ('reference', 'returnAddress'), f"Expected reference/returnAddr, but got {objectref.type}"
@@ -407,7 +450,7 @@ if __name__ == '__main__':
     [main] = find_methods_by_name(clazz, b'main')
     [code] = find_attributes_by_name(clazz, main['attributes'], b'Code')
     code_attribute = parse_code_info(code['info'])
-    pprint(clazz)
-    print_constant_pool(clazz['constant_pool'])
-    print("\n---")
+    #pprint(clazz)
+    #print_constant_pool(clazz['constant_pool'])
+    #print("\n---")
     execute_code(clazz, code_attribute)
