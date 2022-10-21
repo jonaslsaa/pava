@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from dataclasses import dataclass
-from lib2to3.pgen2.token import OP
 import sys
 import os
 import io
@@ -9,6 +8,7 @@ from pprint import pprint
 from enum import Enum, auto
 from typing import Any, List, Tuple, Union
 import struct
+
 from jvm_opcode import Opcode
 
 class Constant(Enum):
@@ -110,6 +110,56 @@ def parse_attributes(f, count) -> list:
         attribute['info'] = f.read(attribute_length)
         attributes.append(attribute)
     return attributes
+
+def parse_attributes_infos(clazz : dict):
+    for attr in clazz['attributes']:
+        attr_name_index = attr['attribute_name_index']
+        attr_name = get_cp(clazz, attr_name_index)['bytes']
+        attr_info_stream = io.BytesIO(attr['info'])
+        match attr_name:
+            case b'BootstrapMethods':
+                attr['info'] = parse_attribute_info_BootstrapMethods(clazz, attr_info_stream)
+            case b'SourceFile':
+                attr['info'] = parse_attribute_info_SourceFile(clazz, attr_info_stream)
+            case b'InnerClasses':
+                attr['info'] = parse_attribute_info_InnerClasses(clazz, attr_info_stream)
+            case _:
+                raise NotImplementedError(f'attribute {attr_name} is not implemented')
+        pprint(attr['info'])
+
+def parse_attribute_info_BootstrapMethods(clazz : dict, f : io.BytesIO):
+    attr = {}
+    attr['num_bootstrap_methods'] = parse_i2(f)
+    bootstrap_methods = []
+    for i in range(attr['num_bootstrap_methods']):
+        method = {}
+        method['bootstrap_method_ref'] = parse_i2(f)
+        method['num_bootstrap_arguments'] = parse_i2(f)
+        method['bootstrap_arguments'] = []
+        for j in range(method['num_bootstrap_arguments']):
+            method['bootstrap_arguments'].append(parse_i2(f))
+        bootstrap_methods.append(method)
+    attr['bootstrap_methods'] = bootstrap_methods
+    return attr
+
+def parse_attribute_info_SourceFile(clazz : dict, f : io.BytesIO):
+    attr = {}
+    attr['sourcefile_index'] = parse_i2(f)
+    return attr
+
+def parse_attribute_info_InnerClasses(clazz : dict, f : io.BytesIO):
+    attr = {}
+    attr['number_of_classes'] = parse_i2(f)
+    classes = []
+    for i in range(attr['number_of_classes']):
+        cls = {}
+        cls['inner_class_info_index'] = parse_i2(f)
+        cls['outer_class_info_index'] = parse_i2(f)
+        cls['inner_name_index'] = parse_i2(f)
+        cls['inner_class_access_flags'] = parse_i2(f)
+        classes.append(cls)
+    attr['classes'] = classes
+    return attr
 
 def print_constant_pool(constant_pool : dict):
     def expand_index(index):
@@ -214,6 +264,7 @@ def parse_class_file(file_path):
         clazz['methods'] = methods
         attributes_count = parse_i2(f)
         clazz['attributes'] = parse_attributes(f, attributes_count)
+        parse_attributes_infos(clazz)
         return clazz
 
 def find_methods_by_name(clazz : dict, name: bytes):
@@ -268,6 +319,7 @@ def get_name_of_member(clazz, name_and_type_index: int) -> str:
     return clazz['constant_pool'][clazz['constant_pool'][name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
 def get_cp(clazz : dict, index: int) -> dict:
+    assert index > 0, "Constant pool index must be positive"
     return clazz['constant_pool'][index - 1]
 
 def pop_expected(stack : List[Operand], expected_type : OperandType):
@@ -347,13 +399,17 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                 else:
                     raise NotImplementedError(f"Unknown method {name_of_class}/{name_of_member} in invokevirtual instruction")
             elif Opcode.invokedynamic == opcode:
-                arg1 = parse_i1(f)
-                arg2 = parse_i1(f)
-                cp_index = (arg1 << 8) + arg2
+                indexbyte1 = parse_u1(f)
+                indexbyte2 = parse_u1(f)
+                cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
                 if not (parse_i1(f) == 0 and parse_i1(f) == 0):
                     raise RuntimeError("invokedynamic arguments are not 0")
                 dynamic_cp = get_cp(clazz, cp_index)
-                pprint(code_attr)
+                assert dynamic_cp['tag'] == Constant.CONSTANT_InvokeDynamic.name, "invokedynamic index is not CONSTANT_InvokeDynamic"
+                bootstrap_method_attr = get_cp(clazz, dynamic_cp['bootstrap_method_attr_index'])
+                name_and_type = get_cp(clazz, dynamic_cp['name_and_type_index'])
+                print(f"Bootstrap method: {bootstrap_method_attr}")
+                print(f"Name and type: {name_and_type}")
                 raise NotImplementedError("invokedynamic is not implemented")
             elif Opcode.bipush == opcode:
                 byte = parse_i1(f)
@@ -571,5 +627,7 @@ if __name__ == '__main__':
     #pprint(clazz)
     #print_constant_pool(clazz['constant_pool'])
     #print("\n---")
-    exec_info = execute_code(clazz, code_attribute)
-    print(f"Executed {exec_info.op_count} operations.")
+    #exec_info = execute_code(clazz, code_attribute)
+    #print(f"Executed {exec_info.op_count} operations.")
+    print_constant_pool(clazz['constant_pool'])
+    pprint(clazz['attributes'])
