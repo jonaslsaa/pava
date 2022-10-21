@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from dataclasses import dataclass
+from lib2to3.pgen2.token import OP
 import sys
 import os
 import io
@@ -33,6 +34,7 @@ class OperandType(Enum):
     FLOAT = auto()
     DOUBLE = auto()
     REFERENCE = auto()
+    RETURN_ADDR = auto()
 
 class ArrayTypeCode(Enum):
     T_BOOLEAN = 4
@@ -330,7 +332,7 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                     if obj.value != b'FakePrintStream':
                         raise NotImplementedError(f"Unsupported stream type {obj.value}")
                     arg = frame.stack[-1]
-                    if arg.type == 'reference':
+                    if arg.type == OperandType.REFERENCE:
                         if arg.value['tag'] == 'CONSTANT_String':
                             constant_string = get_cp(clazz, arg.value['string_index'])['bytes']
                             FakeStreamPrint(constant_string.decode('utf-8'))
@@ -458,11 +460,11 @@ def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
                 frame.stack.append(Operand(type=OperandType.FLOAT, value=2.0))
             elif Opcode.astore_1 == opcode:
                 objectref = frame.stack.pop()
-                assert objectref.type in ('reference', 'returnAddress'), f"Expected reference/returnAddr, but got {objectref.type}"
+                assert objectref.type in (OperandType.REFERENCE, OperandType.RETURN_ADDR), f"Expected reference/returnAddr, but got {objectref.type}"
                 frame.local_vars[1] = objectref
             elif Opcode.aload_1 == opcode:
                 objectref = frame.local_vars[1]
-                assert objectref.type == 'reference', f"Expected reference, but got {objectref.type}"
+                assert objectref.type == OperandType.REFERENCE, f"Expected reference, but got {objectref.type}"
                 frame.stack.append(objectref)
                 '''
                 if_icmpeq = 0x9F
