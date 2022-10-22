@@ -59,6 +59,7 @@ class Opcode(Enum):
     dup = 0x59
     invokevirtual = 0xB6
     invokedynamic = 0xBA
+    invokespecial = 0xB7
     op_return = 0xB1
     bipush = 0x10
     sipush = 0x11
@@ -116,7 +117,10 @@ class Opcode(Enum):
     iastore = 0x4F 
     astore_1 = 0x4C
     
+    aload_0 = 0x2A
     aload_1 = 0x2b
+    aload_2 = 0x2c
+    aload_3 = 0x2d
     
     # Control flow
     if_icmpeq = 0x9F

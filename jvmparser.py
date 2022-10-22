@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum, auto
+from io import BufferedReader
 from typing import Any, List, Tuple, Union
 from pprint import pprint
 
@@ -44,7 +45,7 @@ def from_bsm(clazz : JVMClass, index: int) -> dict:
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
     return [name for (name, mask) in flags if (value & mask) != 0]
 
-def parse_attributes(clazz : JVMClass, f : io.BytesIO, count : int) -> list:
+def parse_attributes(clazz : JVMClass, f : Union[io.BytesIO, BufferedReader], count : int) -> list:
     attributes = []
     for j in range(count):
         # attribute_info {

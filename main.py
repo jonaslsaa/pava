@@ -46,10 +46,16 @@ class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_code(clazz : JVMClass, code_attr : dict) -> ExecutionReturnInfo:
+def execute_method(clazz : JVMClass, code_attr : dict, passed_vars=[]) -> ExecutionReturnInfo:
     code = code_attr['code']
     frame = Frame(stack=[],
                   local_vars=[None] * code_attr['max_locals'])
+
+    # Reference to 'this' object, NOTE: most likely wrong:
+    frame.local_vars[0] = Operand(type=OperandType.REFERENCE, value=0)
+    for i, var in enumerate(passed_vars, start=1):
+        frame.local_vars[i] = var
+        
     operations_count = 0
     with io.BytesIO(code) as f:
         while f.tell() < len(code):
@@ -59,8 +65,9 @@ def execute_code(clazz : JVMClass, code_attr : dict) -> ExecutionReturnInfo:
                 operations_count += 1
                 print(f"{f.tell():4d} {opcode.name}")
             except ValueError:
-                print("Stack trace:")
+                print("  --- Stack trace ---")
                 pprint(frame.stack)
+                pprint(frame.local_vars)
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
                 index = parse_i2(f)
@@ -126,6 +133,9 @@ def execute_code(clazz : JVMClass, code_attr : dict) -> ExecutionReturnInfo:
                 
                 exit(0)
                 raise NotImplementedError("invokedynamic is not implemented")
+            elif Opcode.invokespecial == opcode:
+                # NOTE: unfinishe
+                continue
             elif Opcode.bipush == opcode:
                 byte = parse_i1(f)
                 frame.stack.append(Operand(type=OperandType.INT, value=byte))
@@ -233,18 +243,22 @@ def execute_code(clazz : JVMClass, code_attr : dict) -> ExecutionReturnInfo:
                 objectref = frame.stack.pop()
                 assert objectref.type in (OperandType.REFERENCE, OperandType.RETURN_ADDR), f"Expected reference/returnAddr, but got {objectref.type}"
                 frame.local_vars[1] = objectref
+            elif Opcode.aload_0 == opcode:
+                objectref = frame.local_vars[0]
+                assert objectref.type == OperandType.REFERENCE, f"Expected reference, but got {objectref.type}"
+                frame.stack.append(objectref)
             elif Opcode.aload_1 == opcode:
                 objectref = frame.local_vars[1]
                 assert objectref.type == OperandType.REFERENCE, f"Expected reference, but got {objectref.type}"
                 frame.stack.append(objectref)
-                '''
-                if_icmpeq = 0x9F
-                if_icmpne = 0xA0
-                if_icmplt = 0xA1
-                if_icmpge = 0xA2
-                if_icmpgt = 0xA3
-                if_icmple = 0xA4
-                '''
+            elif Opcode.aload_2 == opcode:
+                objectref = frame.local_vars[2]
+                assert objectref.type == OperandType.REFERENCE, f"Expected reference, but got {objectref.type}"
+                frame.stack.append(objectref)
+            elif Opcode.aload_3 == opcode:
+                objectref = frame.local_vars[3]
+                assert objectref.type == OperandType.REFERENCE, f"Expected reference, but got {objectref.type}"
+                frame.stack.append(objectref)
             elif Opcode.iinc == opcode:
                 index = parse_i1(f)
                 const = parse_i1(f)
@@ -344,10 +358,10 @@ if __name__ == '__main__':
                 print(f"Executing method {method_name}")
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
-                exec_info = execute_code(main_class, code_attr)
+                exec_info = execute_method(main_class, code_attr)
                 print(f"Executed {exec_info.op_count} operations.")
     
-    print_constant_pool(main_class.constant_pool, expand=False)
+    #print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')
