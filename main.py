@@ -54,6 +54,16 @@ class ExecutionReturnInfo:
 class Operand:
     type : OperandType
     value : Any
+    
+@dataclass
+class JVMClass:
+    version : Tuple[int, int]
+    constant_pool : List[dict]
+    methods : List[dict]
+    attributes : List[dict]
+    access_flags : List[str]
+    this_class : int
+    super_class : int
 
 class_access_flags : List[Tuple[str, int]] = [
     ("ACC_PUBLIC"     , 0x0001),
@@ -117,8 +127,8 @@ def parse_attributes(f, count) -> list:
         attributes.append(attribute)
     return attributes
 
-def parse_attributes_infos(clazz : dict):
-    for attr in clazz['attributes']:
+def parse_attributes_infos(clazz : JVMClass):
+    for attr in clazz.attributes:
         attr_name_index = attr['attribute_name_index']
         attr_name = from_cp(clazz, attr_name_index)['bytes']
         attr_info_stream = io.BytesIO(attr['info'])
@@ -134,7 +144,7 @@ def parse_attributes_infos(clazz : dict):
                 raise NotImplementedError(f'attribute {attr_name} is not implemented')
         attr['_name'] = attr_name
 
-def parse_attribute_info_BootstrapMethods(clazz : dict, f : io.BytesIO):
+def parse_attribute_info_BootstrapMethods(clazz : JVMClass, f : io.BytesIO):
     attr = {}
     attr['num_bootstrap_methods'] = parse_i2(f)
     bootstrap_methods = []
@@ -149,12 +159,12 @@ def parse_attribute_info_BootstrapMethods(clazz : dict, f : io.BytesIO):
     attr['bootstrap_methods'] = bootstrap_methods
     return attr
 
-def parse_attribute_info_SourceFile(clazz : dict, f : io.BytesIO):
+def parse_attribute_info_SourceFile(clazz : JVMClass, f : io.BytesIO):
     attr = {}
     attr['sourcefile_index'] = parse_i2(f)
     return attr
 
-def parse_attribute_info_InnerClasses(clazz : dict, f : io.BytesIO):
+def parse_attribute_info_InnerClasses(clazz : JVMClass, f : io.BytesIO):
     attr = {}
     attr['number_of_classes'] = parse_i2(f)
     classes = []
@@ -228,30 +238,33 @@ def parse_interfaces(f, interfaces_count):
         raise NotImplementedError("We don't support interfaces")
     return interfaces
 
+def parse_fields(f, interfaces_count):
+    interfaces = []
+    for i in range(interfaces_count):
+        raise NotImplementedError("We don't support interfaces")
+    return interfaces
+
 def parse_class_file(file_path):
     with open(file_path, "rb") as f:
-        clazz = {}
-        clazz['magic'] = hex(parse_i4(f))
-        if clazz['magic'] != '0xcafebabe':
+        magic = hex(parse_i4(f))
+        if magic != '0xcafebabe':
             raise RuntimeError("Not a Java file: invalid magic number")
-        clazz['minor'] = parse_i2(f)
-        clazz['major'] = parse_i2(f)
+        v_minor = parse_i2(f)
+        v_major = parse_i2(f)
+        version = (v_major, v_minor)
         
         constant_pool_count = parse_i2(f)
-        clazz['constant_pool'] = parse_constant_pool(f, constant_pool_count)
+        constant_pool = parse_constant_pool(f, constant_pool_count)
         
-        clazz['access_flags'] = parse_flags(parse_i2(f), class_access_flags)
-        clazz['this_class'] = parse_i2(f)
-        clazz['super_class'] = parse_i2(f)
+        access_flags = parse_flags(parse_i2(f), class_access_flags)
+        this_class = parse_i2(f)
+        super_class = parse_i2(f)
         
         interfaces_count = parse_i2(f)
         interfaces = parse_interfaces(f, interfaces_count)
-        clazz['interfaces'] = interfaces
         fields_count = parse_i2(f)
-        fields = []
-        for i in range(fields_count):
-            raise NotImplementedError("We don't support fields")
-        clazz['fields'] = fields
+        fields = parse_fields(f, fields_count)
+        
         methods_count = parse_i2(f)
         methods = []
         for i in range(methods_count):
@@ -267,21 +280,22 @@ def parse_class_file(file_path):
             attributes_count = parse_i2(f)
             method['attributes'] = parse_attributes(f, attributes_count)
             methods.append(method)
-        clazz['methods'] = methods
+        methods = methods
         attributes_count = parse_i2(f)
-        clazz['attributes'] = parse_attributes(f, attributes_count)
+        attributes = parse_attributes(f, attributes_count)
+        clazz = JVMClass(version, constant_pool, methods, attributes, access_flags, this_class, super_class)
         parse_attributes_infos(clazz)
         return clazz
 
-def find_methods_by_name(clazz : dict, name: bytes):
+def find_methods_by_name(clazz : JVMClass, name: bytes):
     return [method
-            for method in clazz['methods']
-            if clazz['constant_pool'][method['name_index'] - 1]['bytes'] == name]
+            for method in clazz.methods
+            if clazz.constant_pool[method['name_index'] - 1]['bytes'] == name]
 
-def find_attributes_by_name(clazz : dict, attributes, name: bytes):
+def find_attributes_by_name(clazz : JVMClass, attributes, name: bytes):
     return [attr
             for attr in attributes
-            if clazz['constant_pool'][attr['attribute_name_index'] - 1]['bytes'] == name]
+            if clazz.constant_pool[attr['attribute_name_index'] - 1]['bytes'] == name]
 
 def parse_code_info(info: bytes) -> dict:
     code_attribute = {}
@@ -319,18 +333,18 @@ def FakeStreamPrint(s: str):
     print(s)
 
 def get_name_of_class(clazz, class_index: int) -> str:
-    return clazz['constant_pool'][clazz['constant_pool'][class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+    return clazz.constant_pool[clazz.constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
 def get_name_of_member(clazz, name_and_type_index: int) -> str:
-    return clazz['constant_pool'][clazz['constant_pool'][name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+    return clazz.constant_pool[clazz.constant_pool[name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
-def from_cp(clazz : dict, index: int) -> dict:
+def from_cp(clazz : JVMClass, index: int) -> dict:
     assert index > 0, "Constant pool index must be positive"
-    return clazz['constant_pool'][index - 1]
+    return clazz.constant_pool[index - 1]
 
-def from_bsm(clazz : dict, index: int) -> dict:
+def from_bsm(clazz : JVMClass, index: int) -> dict:
     assert index >= 0, "Bootstrap method index must be non-negative"
-    for attr in clazz['attributes']: # should be cached, as it is the only bsm
+    for attr in clazz.attributes: # should be cached, as it is the only bsm
         if attr['_name'] == AttributeInfoName.BOOTSTRAP_METHOD.value:
             return attr['info']['bootstrap_methods'][index]
     raise RuntimeError("Bootstrap method not found")
@@ -346,7 +360,7 @@ class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_code(clazz : dict, code_attr : dict) -> ExecutionReturnInfo:
+def execute_code(clazz : JVMClass, code_attr : dict) -> ExecutionReturnInfo:
     code = code_attr['code']
     frame = Frame(stack=[],
                   local_vars=[None] * code_attr['max_locals'])
@@ -640,12 +654,11 @@ if __name__ == '__main__':
     [code] = find_attributes_by_name(clazz, main['attributes'], b'Code')
     code_attribute = parse_code_info(code['info'])
     
-    exec_info = execute_code(clazz, code_attribute)
-    print(f"Executed {exec_info.op_count} operations.")
+    #exec_info = execute_code(clazz, code_attribute)
+    #print(f"Executed {exec_info.op_count} operations.")
     
-    
-    print_constant_pool(clazz['constant_pool'], expand=False)
-    print('Attributes:')
-    pprint(clazz['attributes'])
-    print('Methods:')
-    pprint(clazz['methods'])
+    #print_constant_pool(clazz.constant_pool, expand=False)
+    #print('Attributes:')
+    #pprint(clazz.attributes)
+    #print('Methods:')
+    #pprint(clazz.methods)
