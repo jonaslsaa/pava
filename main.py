@@ -6,12 +6,11 @@ import os
 import io
 from pprint import pprint
 from enum import Enum, auto
-from typing import Any, List, Tuple, Union
-import struct
+from typing import Any, List, Tuple
 
 from jvmconsts import *
-from jvmparser import AttributeInfoName, JVMClass, find_attributes_by_name, parse_class_file
-from jvmparser import find_methods_by_name, print_constant_pool, get_name_of_class, get_name_of_member, from_bsm, from_cp
+from jvmparser import AttributeInfoName, JVMClassFile, parse_class_file
+from jvmparser import print_constant_pool, get_name_of_class, get_name_of_member, from_bsm, from_cp
 from utils import *
 
 class OperandType(Enum):
@@ -23,14 +22,45 @@ class OperandType(Enum):
     REFERENCE = auto()
     RETURN_ADDR = auto()
 
-@dataclass
-class ExecutionReturnInfo:
-    op_count : int
-
 @dataclass(frozen=True, slots=True)
 class Operand:
     type : OperandType
     value : Any
+    
+@dataclass
+class ExecutionReturnInfo:
+    op_count : int
+    return_value : Operand = None
+
+#ex: (II)I -> ((OperandType.INT, OperandType.INT), OperandType.INT)
+def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
+    if sig[0] == '(':
+        sig = sig[1:]
+        args = []
+        while sig[0] != ')':
+            if sig[0] == 'I':
+                args.append(OperandType.INT)
+            elif sig[0] == 'J':
+                args.append(OperandType.LONG)
+            elif sig[0] == 'F':
+                args.append(OperandType.FLOAT)
+            elif sig[0] == 'D':
+                args.append(OperandType.DOUBLE)
+            else:
+                raise RuntimeError(f"Unknown signature type: {sig[0]}")
+            sig = sig[1:]
+        sig = sig[1:]
+        if sig[0] == 'I':
+            return_type = OperandType.INT
+        elif sig[0] == 'J':
+            return_type = OperandType.LONG
+        elif sig[0] == 'F':
+            return_type = OperandType.FLOAT
+        elif sig[0] == 'D':
+            return_type = OperandType.DOUBLE
+        else:
+            raise RuntimeError(f"Unknown signature return type: {sig[0]}")
+        return (args, return_type)
 
 def FakeStreamPrint(s: str):
     print(s)
@@ -46,15 +76,23 @@ class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_method(clazz : JVMClass, code_attr : dict, passed_vars=[]) -> ExecutionReturnInfo:
+def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
+    assert clazz.methods_lookup is not None, "No methods lookup table"
+    assert clazz.methods is not None, "No methods"
+    assert clazz.attributes is not None, "No attributes"
     code = code_attr['code']
     frame = Frame(stack=[],
-                  local_vars=[None] * code_attr['max_locals'])
+                  local_vars=[])
 
-    # Reference to 'this' object, NOTE: most likely wrong:
-    frame.local_vars[0] = Operand(type=OperandType.REFERENCE, value=0)
-    for i, var in enumerate(passed_vars, start=1):
-        frame.local_vars[i] = var
+    # Reference to 'this' object
+    if has_this:
+        frame.local_vars.append(Operand(type=OperandType.REFERENCE, value=0))
+    # Arguments passed to the method
+    for var in passed_vars:
+        frame.local_vars.append(var)
+    
+    while len(frame.local_vars) < code_attr['max_locals']:
+        frame.local_vars.append(None)
         
     operations_count = 0
     with io.BytesIO(code) as f:
@@ -63,9 +101,10 @@ def execute_method(clazz : JVMClass, code_attr : dict, passed_vars=[]) -> Execut
             try:
                 opcode = Opcode(opcode_byte)
                 operations_count += 1
+                #print("     Stack:", frame.stack)
                 print(f"{f.tell():4d} {opcode.name}")
             except ValueError:
-                print("  --- Stack trace ---")
+                print("   --- Stack trace ---")
                 pprint(frame.stack)
                 pprint(frame.local_vars)
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
@@ -131,8 +170,39 @@ def execute_method(clazz : JVMClass, code_attr : dict, passed_vars=[]) -> Execut
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
                 
-                exit(0)
                 raise NotImplementedError("invokedynamic is not implemented")
+            elif Opcode.invokestatic == opcode:
+                indexbyte1 = parse_u1(f)
+                indexbyte2 = parse_u1(f)
+                cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
+                static_cp = from_cp(clazz, cp_index)
+                assert static_cp['tag'] == Constant.CONSTANT_Methodref.name, "invokestatic index is not CONSTANT_Methodref"
+                class_index = static_cp['class_index'] # We will assume same class file for now, in future we might need to look up other CP pools, etc. in other files
+                name_and_type_index = static_cp['name_and_type_index']
+                name_and_type = from_cp(clazz, name_and_type_index)
+                key = (name_and_type['name_index'], name_and_type['descriptor_index'])
+                method = clazz.methods_lookup[key]
+                
+                method_descriptor = from_cp(clazz, method['descriptor_index'])['bytes'].decode('utf-8')
+                method_signature = parse_signature(method_descriptor)
+
+                code_attr = method['attributes'][0]
+                assert code_attr['_name'] == b'Code', "invokestatic method is not Code"
+                # pop arguments from stack
+                args = []
+                for arg_type in method_signature[0]:
+                    v = frame.stack.pop()
+                    assert v.type == arg_type, f"invokestatic argument type mismatch: expected {arg_type}, got {v.type}"
+                    args.append(v)
+                # run the method
+                ret = execute_method(clazz, code_attr['info'], passed_vars=args)
+
+                operations_count += ret.op_count
+                # push return value to stack
+                ret_v = ret.return_value
+                if ret_v is not None:
+                    assert method_signature[1] == ret_v.type, f"invokestatic return type mismatch: expected {method_signature[1]}, got {ret_v.type}"
+                    frame.stack.append(ret_v)
             elif Opcode.invokespecial == opcode:
                 # NOTE: unfinishe
                 continue
@@ -324,6 +394,9 @@ def execute_method(clazz : JVMClass, code_attr : dict, passed_vars=[]) -> Execut
                 v = frame.stack.pop()
                 frame.stack.append(v)
                 frame.stack.append(v)
+            elif Opcode.ireturn == opcode:
+                v = pop_expected(frame.stack, OperandType.INT)
+                return ExecutionReturnInfo(op_count=operations_count, return_value=v)
             elif Opcode.op_return == opcode:
                 return ExecutionReturnInfo(op_count=operations_count)
             elif Opcode.nop == opcode:
@@ -353,13 +426,14 @@ if __name__ == '__main__':
     assert main_class.methods is not None, "Main class has no methods"
     for method in  main_class.methods:
         method_name = from_cp(main_class, method['name_index'])['bytes'].decode('utf-8')
+        if method_name not in ('<init>', 'main'): continue
         for attr in method['attributes']:
             if attr['_name'] == AttributeInfoName.CODE.value:
-                print(f"Executing method {method_name}")
+                print(f"   Executing method {method_name}")
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
-                exec_info = execute_method(main_class, code_attr)
-                print(f"Executed {exec_info.op_count} operations.")
+                exec_info = execute_method(main_class, code_attr, has_this=method_name == '<init>')
+                print(f"   Executed {exec_info.op_count} operations.")
     
     #print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')

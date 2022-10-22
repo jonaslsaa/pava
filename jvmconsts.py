@@ -60,10 +60,13 @@ class Opcode(Enum):
     invokevirtual = 0xB6
     invokedynamic = 0xBA
     invokespecial = 0xB7
+    invokestatic = 0xB8
     op_return = 0xB1
     bipush = 0x10
     sipush = 0x11
     nop = 0x0
+    
+    ireturn = 0xAC
     
     i2f = 0x86
     iadd = 0x60
