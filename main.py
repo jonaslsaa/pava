@@ -30,13 +30,13 @@ class Operand:
 @dataclass
 class ExecutionReturnInfo:
     op_count : int
-    return_value : Operand = None
+    return_value : Operand | None = None
 
 #ex: (II)I -> ((OperandType.INT, OperandType.INT), OperandType.INT)
 def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
     if sig[0] == '(':
         sig = sig[1:]
-        args = []
+        args : List[OperandType] = []
         while sig[0] != ')':
             if sig[0] == 'I':
                 args.append(OperandType.INT)
@@ -61,6 +61,8 @@ def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
         else:
             raise RuntimeError(f"Unknown signature return type: {sig[0]}")
         return (args, return_type)
+    else:
+        raise RuntimeError(f"Invalid signature: {sig}")
 
 def FakeStreamPrint(s: str):
     print(s)
