@@ -10,7 +10,7 @@ from typing import Any, List, Tuple, Union
 import struct
 
 from jvmconsts import *
-from jvmparser import JVMClass, parse_class_file, parse_code_info, find_attributes_by_name
+from jvmparser import JVMClass, parse_class_file
 from jvmparser import find_methods_by_name, print_constant_pool, get_name_of_class, get_name_of_member, from_bsm, from_cp
 from utils import *
 
@@ -337,13 +337,12 @@ if __name__ == '__main__':
         exit(1)
     clazz = parse_class_file(file_path)
     [main] = find_methods_by_name(clazz, b'main')
-    [code] = find_attributes_by_name(clazz, main['attributes'], b'Code')
-    code_attribute = parse_code_info(code['info'])
+    pprint(main)
     
     #exec_info = execute_code(clazz, code_attribute)
     #print(f"Executed {exec_info.op_count} operations.")
     
-    print_constant_pool(clazz.constant_pool, expand=False)
+    #print_constant_pool(clazz.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')
