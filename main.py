@@ -10,7 +10,7 @@ from typing import Any, List, Tuple, Union
 import struct
 
 from jvmconsts import *
-from jvmparser import JVMClass, parse_class_file
+from jvmparser import AttributeInfoName, JVMClass, find_attributes_by_name, parse_class_file
 from jvmparser import find_methods_by_name, print_constant_pool, get_name_of_class, get_name_of_member, from_bsm, from_cp
 from utils import *
 
@@ -335,14 +335,19 @@ if __name__ == '__main__':
     if not os.path.exists(file_path):
         print(f"ERROR: file {file_path} does not exist")
         exit(1)
-    clazz = parse_class_file(file_path)
-    [main] = find_methods_by_name(clazz, b'main')
-    pprint(main)
+    main_class = parse_class_file(file_path)
+    assert main_class.methods is not None, "Main class has no methods"
+    for method in  main_class.methods:
+        method_name = from_cp(main_class, method['name_index'])['bytes'].decode('utf-8')
+        for attr in method['attributes']:
+            if attr['_name'] == AttributeInfoName.CODE.value:
+                print(f"Executing method {method_name}")
+                code_attr = attr['info']
+                assert 'code' in code_attr, "Code attribute has no code"
+                exec_info = execute_code(main_class, code_attr)
+                print(f"Executed {exec_info.op_count} operations.")
     
-    #exec_info = execute_code(clazz, code_attribute)
-    #print(f"Executed {exec_info.op_count} operations.")
-    
-    #print_constant_pool(clazz.constant_pool, expand=False)
+    print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')

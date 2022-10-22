@@ -1,6 +1,8 @@
 public abstract class Main {
     public static void main(String[] args) {
-        String s = "Hello";
-        System.out.println(s + " World!");
+        int a = 2;
+        System.out.println(a * 32 + 1);
+        //String s = "Hello";
+        //System.out.println(s + " World!");
     }
 }
