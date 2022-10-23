@@ -64,9 +64,6 @@ def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
     else:
         raise RuntimeError(f"Invalid signature: {sig}")
 
-def FakeStreamPrint(s: str):
-    print(s)
-
 def pop_expected(stack : List[Operand], expected_type : OperandType):
     assert len(stack) > 0, "Stack underflow"
     if stack[-1].type != expected_type:
@@ -104,7 +101,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 opcode = Opcode(opcode_byte)
                 operations_count += 1
                 #print("     Stack:", frame.stack)
-                print(f"{f.tell():4d} {opcode.name}")
+                #print(f"{f.tell():4d} {opcode.name}")
             except ValueError:
                 print("   --- Stack trace ---")
                 pprint(frame.stack)
@@ -137,7 +134,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 methodref = from_cp(clazz, index)
                 name_of_class = get_name_of_class(clazz, methodref['class_index'])
                 name_of_member = get_name_of_member(clazz, methodref['name_and_type_index']);
-                if name_of_class == 'java/io/PrintStream' and name_of_member == 'println':
+                if name_of_class == 'java/io/PrintStream' and name_of_member in ('print', 'println'):
                     n = len(frame.stack)
                     if len(frame.stack) < 2:
                         raise RuntimeError('{name_of_class}/{name_of_member} expectes 2 arguments, but provided {n}')
@@ -145,16 +142,18 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                     if obj.value != b'FakePrintStream':
                         raise NotImplementedError(f"Unsupported stream type {obj.value}")
                     arg = frame.stack[-1]
+                    
+                    end_str = '\n' if name_of_member == 'println' else ''
                     if arg.type == OperandType.REFERENCE:
                         if arg.value['tag'] == 'CONSTANT_String':
                             constant_string = from_cp(clazz, arg.value['string_index'])['bytes']
-                            FakeStreamPrint(constant_string.decode('utf-8'))
+                            print(constant_string.decode('utf-8'), end=end_str)
                         else:
                             raise NotImplementedError(f"println for {arg.value['tag']} is not implemented")
                     elif arg.type == OperandType.INT:
-                        FakeStreamPrint(str(arg.value))
+                        print(str(arg.value), end=end_str)
                     elif arg.type == OperandType.FLOAT:
-                        FakeStreamPrint(str(arg.value))
+                        print(str(arg.value), end=end_str)
                     else:
                         raise NotImplementedError(f"Support for {arg.type} is not implemented")
                 else:
@@ -171,6 +170,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 name_and_type = from_cp(clazz, dynamic_cp['name_and_type_index'])
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
+                print_constant_pool(clazz.constant_pool)
                 
                 raise NotImplementedError("invokedynamic is not implemented")
             elif Opcode.invokestatic == opcode:

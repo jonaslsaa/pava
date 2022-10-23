@@ -24,12 +24,15 @@ class AttributeInfoName(Enum):
     SOURCE_FILE = b'SourceFile'
     CODE = b'Code'
     LINE_NUMBER_TABLE = b'LineNumberTable'
+    STACK_MAP_TABLE = b'StackMapTable'
 
 def get_name_of_class(clazz, class_index: int) -> str:
     return clazz.constant_pool[clazz.constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
 def get_name_of_member(clazz, name_and_type_index: int) -> str:
     return clazz.constant_pool[clazz.constant_pool[name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+
+CACHED_ATTR_INSTANCES = {}
 
 def from_cp(clazz : JVMClassFile, index: int) -> dict:
     assert index > 0, "Constant pool index must be positive"
@@ -38,9 +41,16 @@ def from_cp(clazz : JVMClassFile, index: int) -> dict:
 def from_bsm(clazz : JVMClassFile, index: int) -> dict:
     assert index >= 0, "Bootstrap method index must be non-negative"
     assert clazz.attributes is not None, "Bootstrap method index must be non-negative"
-    for attr in clazz.attributes: # should be cached, as it is the only bsm
-        if attr['_name'] == AttributeInfoName.BOOTSTRAP_METHOD.value:
-            return attr['info']['bootstrap_methods'][index]
+    bsm_info = None
+    if AttributeInfoName.BOOTSTRAP_METHOD.value in CACHED_ATTR_INSTANCES:
+        bsm_info = CACHED_ATTR_INSTANCES[AttributeInfoName.BOOTSTRAP_METHOD]
+    else: # find the BootstrapMethods attribute
+        for attr in clazz.attributes: # should be cached, as it is the only bsm
+            if attr['_name'] == AttributeInfoName.BOOTSTRAP_METHOD.value:
+                bsm_info = attr['info']
+                CACHED_ATTR_INSTANCES[AttributeInfoName.BOOTSTRAP_METHOD] = bsm_info
+    if bsm_info != None:
+        return bsm_info['bootstrap_methods'][index]
     raise RuntimeError("Bootstrap method not found")
 
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
@@ -66,7 +76,10 @@ def parse_attributes(clazz : JVMClassFile, f : Union[io.BytesIO, BufferedReader]
        
 def parse_attribute_info(clazz : JVMClassFile, attr_name : bytes, info_bytes) -> dict:
     attr_info_stream = io.BytesIO(info_bytes)
-    attr_info_type = AttributeInfoName(attr_name)
+    try:
+        attr_info_type = AttributeInfoName(attr_name)
+    except ValueError:
+        raise NotImplementedError(f"Attribute {attr_name} is not implemented")
     match attr_info_type:
         case AttributeInfoName.BOOTSTRAP_METHOD:
             return parse_attribute_info_BootstrapMethods(clazz, attr_info_stream)
@@ -78,6 +91,8 @@ def parse_attribute_info(clazz : JVMClassFile, attr_name : bytes, info_bytes) ->
             return parse_attribute_info_Code(clazz, attr_info_stream)
         case AttributeInfoName.LINE_NUMBER_TABLE:
             return parse_attribute_info_LineNumberTable(clazz, attr_info_stream)
+        case AttributeInfoName.STACK_MAP_TABLE:
+            return parse_attribute_info_StackMapTable(clazz, attr_info_stream)
         case _:
             raise NotImplementedError(f'attribute {attr_name} is not implemented')
 
@@ -125,6 +140,33 @@ def parse_attribute_info_LineNumberTable(clazz : JVMClassFile, f : io.BytesIO):
         entry['line_number'] = parse_i2(f)
         table.append(entry)
     attr['line_number_table'] = table
+    return attr
+
+def parse_attribute_info_StackMapTable(clazz : JVMClassFile, f : io.BytesIO):
+    attr = {}
+    attr['number_of_entries'] = parse_i2(f)
+    entries = []
+    for i in range(attr['number_of_entries']):
+        entry = {}
+        entry['frame_type'] = parse_i1(f)
+        if entry['frame_type'] <= 63:
+            pass
+        elif entry['frame_type'] <= 127:
+            pass
+        elif entry['frame_type'] <= 246:
+            pass
+        elif entry['frame_type'] <= 247:
+            pass
+        elif entry['frame_type'] <= 250:
+            pass
+        elif entry['frame_type'] <= 251:
+            pass
+        elif entry['frame_type'] <= 254:
+            pass
+        elif entry['frame_type'] <= 255:
+            pass
+        entries.append(entry)
+    attr['entries'] = entries
     return attr
 
 def parse_attribute_info_Code(clazz : JVMClassFile, f : io.BytesIO) -> dict:
