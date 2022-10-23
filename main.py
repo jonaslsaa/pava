@@ -101,7 +101,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 opcode = Opcode(opcode_byte)
                 operations_count += 1
                 #print("     Stack:", frame.stack)
-                #print(f"{f.tell():4d} {opcode.name}")
+                print(f"{f.tell():4d} {opcode.name}")
             except ValueError:
                 print("   --- Stack trace ---")
                 pprint(frame.stack)
@@ -125,8 +125,6 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                     frame.stack.append(Operand(type=OperandType.INT, value=v['bytes']))
                 elif v['tag'] == Constant.CONSTANT_Float.name:
                     frame.stack.append(Operand(type=OperandType.FLOAT, value=v['bytes']))
-                    print(v['bytes'])
-                    print("Float", float(v['bytes']))
                 else:
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
@@ -151,9 +149,10 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                         else:
                             raise NotImplementedError(f"println for {arg.value['tag']} is not implemented")
                     elif arg.type == OperandType.INT:
-                        print(str(arg.value), end=end_str)
+                        print(arg.value, end=end_str)
                     elif arg.type == OperandType.FLOAT:
-                        print(str(arg.value), end=end_str)
+                        r_value = str(round(arg.value, 5))
+                        print(r_value, end=end_str)
                     else:
                         raise NotImplementedError(f"Support for {arg.type} is not implemented")
                 else:
@@ -397,9 +396,16 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 frame.stack.append(v)
                 frame.stack.append(v)
             elif Opcode.ireturn == opcode:
-                v = pop_expected(frame.stack, OperandType.INT)
-                return ExecutionReturnInfo(op_count=operations_count, return_value=v)
-            elif Opcode.op_return == opcode:
+                return ExecutionReturnInfo(op_count=operations_count, return_value=pop_expected(frame.stack, OperandType.INT))
+            elif Opcode.freturn == opcode:
+                return ExecutionReturnInfo(op_count=operations_count, return_value=pop_expected(frame.stack, OperandType.FLOAT))
+            elif Opcode.areturn == opcode:
+                return ExecutionReturnInfo(op_count=operations_count, return_value=pop_expected(frame.stack, OperandType.REFERENCE))
+            elif Opcode.lreturn == opcode:
+                return ExecutionReturnInfo(op_count=operations_count, return_value=pop_expected(frame.stack, OperandType.LONG))
+            elif Opcode.dreturn == opcode:
+                return ExecutionReturnInfo(op_count=operations_count, return_value=pop_expected(frame.stack, OperandType.DOUBLE))
+            elif Opcode.return_op == opcode:
                 return ExecutionReturnInfo(op_count=operations_count)
             elif Opcode.nop == opcode:
                 pass
