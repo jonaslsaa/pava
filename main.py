@@ -109,7 +109,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
                 index = parse_i2(f)
-                fieldref = from_cp(clazz, index)
+                fieldref = from_cp(clazz.constant_pool, index)
                 name_of_class = get_name_of_class(clazz, fieldref['class_index'])
                 name_of_member = get_name_of_member(clazz, fieldref['name_and_type_index'])
                 if name_of_class == 'java/lang/System' and name_of_member == 'out':
@@ -118,9 +118,9 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                     raise NotImplementedError(f"Unsupported member {name_of_class}/{name_of_member} in getstatic instruction")
             elif Opcode.ldc == opcode:
                 index = parse_i1(f)
-                v = from_cp(clazz, index)
+                v = from_cp(clazz.constant_pool, index)
                 if v['tag'] == Constant.CONSTANT_String.name:
-                    frame.stack.append(Operand(type=OperandType.REFERENCE, value=from_cp(clazz, index)))
+                    frame.stack.append(Operand(type=OperandType.REFERENCE, value=from_cp(clazz.constant_pool, index)))
                 elif v['tag'] == Constant.CONSTANT_Integer.name:
                     frame.stack.append(Operand(type=OperandType.INT, value=v['bytes']))
                 elif v['tag'] == Constant.CONSTANT_Float.name:
@@ -129,7 +129,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
                 index = parse_i2(f)
-                methodref = from_cp(clazz, index)
+                methodref = from_cp(clazz.constant_pool, index)
                 name_of_class = get_name_of_class(clazz, methodref['class_index'])
                 name_of_member = get_name_of_member(clazz, methodref['name_and_type_index']);
                 if name_of_class == 'java/io/PrintStream' and name_of_member in ('print', 'println'):
@@ -144,7 +144,7 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                     end_str = '\n' if name_of_member == 'println' else ''
                     if arg.type == OperandType.REFERENCE:
                         if arg.value['tag'] == 'CONSTANT_String':
-                            constant_string = from_cp(clazz, arg.value['string_index'])['bytes']
+                            constant_string = from_cp(clazz.constant_pool, arg.value['string_index'])['bytes']
                             print(constant_string.decode('utf-8'), end=end_str)
                         else:
                             raise NotImplementedError(f"println for {arg.value['tag']} is not implemented")
@@ -163,10 +163,10 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
                 if not (parse_i1(f) == 0 and parse_i1(f) == 0):
                     raise RuntimeError("invokedynamic arguments are not 0")
-                dynamic_cp = from_cp(clazz, cp_index)
+                dynamic_cp = from_cp(clazz.constant_pool, cp_index)
                 assert dynamic_cp['tag'] == Constant.CONSTANT_InvokeDynamic.name, "invokedynamic index is not CONSTANT_InvokeDynamic"
                 bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
-                name_and_type = from_cp(clazz, dynamic_cp['name_and_type_index'])
+                name_and_type = from_cp(clazz.constant_pool, dynamic_cp['name_and_type_index'])
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
                 print_constant_pool(clazz.constant_pool)
@@ -176,15 +176,15 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 indexbyte1 = parse_u1(f)
                 indexbyte2 = parse_u1(f)
                 cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
-                static_cp = from_cp(clazz, cp_index)
+                static_cp = from_cp(clazz.constant_pool, cp_index)
                 assert static_cp['tag'] == Constant.CONSTANT_Methodref.name, "invokestatic index is not CONSTANT_Methodref"
                 class_index = static_cp['class_index'] # We will assume same class file for now, in future we might need to look up other CP pools, etc. in other files
                 name_and_type_index = static_cp['name_and_type_index']
-                name_and_type = from_cp(clazz, name_and_type_index)
+                name_and_type = from_cp(clazz.constant_pool, name_and_type_index)
                 key = (name_and_type['name_index'], name_and_type['descriptor_index'])
                 method = clazz.methods_lookup[key]
                 
-                method_descriptor = from_cp(clazz, method['descriptor_index'])['bytes'].decode('utf-8')
+                method_descriptor = from_cp(clazz.constant_pool, method['descriptor_index'])['bytes'].decode('utf-8')
                 method_signature = parse_signature(method_descriptor)
 
                 code_attr = method['attributes'][0]
@@ -432,18 +432,19 @@ if __name__ == '__main__':
         exit(1)
     main_class = parse_class_file(file_path)
     assert main_class.methods is not None, "Main class has no methods"
+    pprint(main_class)
     for method in  main_class.methods:
-        method_name = from_cp(main_class, method['name_index'])['bytes'].decode('utf-8')
+        method_name = from_cp(main_class.constant_pool, method['name_index'])['bytes'].decode('utf-8')
         if method_name not in ('<init>', 'main'): continue
         for attr in method['attributes']:
             if attr['_name'] == AttributeInfoName.CODE.value:
-                print(f"   Executing method {method_name}")
+                print(f"   Method {method_name}")
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
                 exec_info = execute_method(main_class, code_attr, has_this=method_name == '<init>')
                 print(f"   Executed {exec_info.op_count} operations.")
     
-    #print_constant_pool(main_class.constant_pool, expand=False)
+    print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')

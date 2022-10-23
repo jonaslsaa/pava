@@ -11,12 +11,14 @@ from utils import *
 class JVMClassFile:
     version : Tuple[int, int]
     constant_pool : List[dict]
-    methods : List[dict] | None
-    methods_lookup : dict | None
-    attributes : List[dict] | None
+    methods : List[dict]
+    methods_lookup : dict
+    attributes : List[dict]
     access_flags : List[str]
     this_class : int
     super_class : int
+    interfaces : List[dict]
+    fields : List[dict]
 
 class AttributeInfoName(Enum):
     BOOTSTRAP_METHOD = b'BootstrapMethods'
@@ -34,9 +36,9 @@ def get_name_of_member(clazz, name_and_type_index: int) -> str:
 
 CACHED_ATTR_INSTANCES = {}
 
-def from_cp(clazz : JVMClassFile, index: int) -> dict:
+def from_cp(constant_pool : List[dict], index: int) -> dict:
     assert index > 0, "Constant pool index must be positive"
-    return clazz.constant_pool[index - 1]
+    return constant_pool[index - 1]
 
 def from_bsm(clazz : JVMClassFile, index: int) -> dict:
     assert index >= 0, "Bootstrap method index must be non-negative"
@@ -56,7 +58,7 @@ def from_bsm(clazz : JVMClassFile, index: int) -> dict:
 def parse_flags(value: int, flags: List[Tuple[str, int]]) -> List[str]:
     return [name for (name, mask) in flags if (value & mask) != 0]
 
-def parse_attributes(clazz : JVMClassFile, f : Union[io.BytesIO, BufferedReader], count : int) -> list:
+def parse_attributes(constant_pool : List[dict], f : Union[io.BytesIO, BufferedReader], count : int) -> list:
     attributes = []
     for j in range(count):
         # attribute_info {
@@ -66,15 +68,15 @@ def parse_attributes(clazz : JVMClassFile, f : Union[io.BytesIO, BufferedReader]
         # }
         attribute = {}
         attribute['attribute_name_index'] = parse_i2(f)
-        attribute['_name'] = from_cp(clazz, attribute['attribute_name_index'])['bytes']
+        attribute['_name'] = from_cp(constant_pool, attribute['attribute_name_index'])['bytes']
         attribute_length = parse_i4(f)
         
         info_bytes = f.read(attribute_length)
-        attribute['info'] = parse_attribute_info(clazz, attribute['_name'], info_bytes)
+        attribute['info'] = parse_attribute_info(constant_pool, attribute['_name'], info_bytes)
         attributes.append(attribute)
     return attributes
        
-def parse_attribute_info(clazz : JVMClassFile, attr_name : bytes, info_bytes) -> dict:
+def parse_attribute_info(constant_pool : List[dict], attr_name : bytes, info_bytes) -> dict:
     attr_info_stream = io.BytesIO(info_bytes)
     try:
         attr_info_type = AttributeInfoName(attr_name)
@@ -82,21 +84,21 @@ def parse_attribute_info(clazz : JVMClassFile, attr_name : bytes, info_bytes) ->
         raise NotImplementedError(f"Attribute {attr_name} is not implemented")
     match attr_info_type:
         case AttributeInfoName.BOOTSTRAP_METHOD:
-            return parse_attribute_info_BootstrapMethods(clazz, attr_info_stream)
+            return parse_attribute_info_BootstrapMethods(constant_pool, attr_info_stream)
         case AttributeInfoName.SOURCE_FILE:
-            return parse_attribute_info_SourceFile(clazz, attr_info_stream)
+            return parse_attribute_info_SourceFile(constant_pool, attr_info_stream)
         case AttributeInfoName.INNER_CLASSES:
-            return parse_attribute_info_InnerClasses(clazz, attr_info_stream)
+            return parse_attribute_info_InnerClasses(constant_pool, attr_info_stream)
         case AttributeInfoName.CODE:
-            return parse_attribute_info_Code(clazz, attr_info_stream)
+            return parse_attribute_info_Code(constant_pool, attr_info_stream)
         case AttributeInfoName.LINE_NUMBER_TABLE:
-            return parse_attribute_info_LineNumberTable(clazz, attr_info_stream)
+            return parse_attribute_info_LineNumberTable(constant_pool, attr_info_stream)
         case AttributeInfoName.STACK_MAP_TABLE:
-            return parse_attribute_info_StackMapTable(clazz, attr_info_stream)
+            return parse_attribute_info_StackMapTable(constant_pool, attr_info_stream)
         case _:
             raise NotImplementedError(f'attribute {attr_name} is not implemented')
 
-def parse_attribute_info_BootstrapMethods(clazz : JVMClassFile, f : io.BytesIO):
+def parse_attribute_info_BootstrapMethods(constant_pool : List[dict], f : io.BytesIO):
     attr = {}
     attr['num_bootstrap_methods'] = parse_i2(f)
     bootstrap_methods = []
@@ -111,12 +113,12 @@ def parse_attribute_info_BootstrapMethods(clazz : JVMClassFile, f : io.BytesIO):
     attr['bootstrap_methods'] = bootstrap_methods
     return attr
 
-def parse_attribute_info_SourceFile(clazz : JVMClassFile, f : io.BytesIO):
+def parse_attribute_info_SourceFile(constant_pool : List[dict], f : io.BytesIO):
     attr = {}
     attr['sourcefile_index'] = parse_i2(f)
     return attr
 
-def parse_attribute_info_InnerClasses(clazz : JVMClassFile, f : io.BytesIO):
+def parse_attribute_info_InnerClasses(constant_pool : List[dict], f : io.BytesIO):
     attr = {}
     attr['number_of_classes'] = parse_i2(f)
     classes = []
@@ -130,7 +132,7 @@ def parse_attribute_info_InnerClasses(clazz : JVMClassFile, f : io.BytesIO):
     attr['classes'] = classes
     return attr
 
-def parse_attribute_info_LineNumberTable(clazz : JVMClassFile, f : io.BytesIO):
+def parse_attribute_info_LineNumberTable(constant_pool : List[dict], f : io.BytesIO):
     attr = {}
     attr['line_number_table_length'] = parse_i2(f)
     table = []
@@ -142,7 +144,7 @@ def parse_attribute_info_LineNumberTable(clazz : JVMClassFile, f : io.BytesIO):
     attr['line_number_table'] = table
     return attr
 
-def parse_attribute_info_StackMapTable(clazz : JVMClassFile, f : io.BytesIO):
+def parse_attribute_info_StackMapTable(constant_pool : List[dict], f : io.BytesIO):
     attr = {}
     attr['number_of_entries'] = parse_i2(f)
     entries = []
@@ -169,7 +171,7 @@ def parse_attribute_info_StackMapTable(clazz : JVMClassFile, f : io.BytesIO):
     attr['entries'] = entries
     return attr
 
-def parse_attribute_info_Code(clazz : JVMClassFile, f : io.BytesIO) -> dict:
+def parse_attribute_info_Code(constant_pool : List[dict], f : io.BytesIO) -> dict:
     code_attribute = {}
     # Code_attribute {
     #     u2 attribute_name_index;
@@ -195,7 +197,7 @@ def parse_attribute_info_Code(clazz : JVMClassFile, f : io.BytesIO) -> dict:
     for i in range(exception_table_length):
         raise NotImplementedError("We don't support exception tables")
     attributes_count = parse_i2(f)
-    code_attribute['attributes'] = parse_attributes(clazz, f, attributes_count)
+    code_attribute['attributes'] = parse_attributes(constant_pool, f, attributes_count)
     # NOTE: parsing the code attribute is not finished
     return code_attribute
 
@@ -264,14 +266,21 @@ def parse_constant_pool(f, constant_pool_count) -> list:
 def parse_interfaces(f, interfaces_count):
     interfaces = []
     for i in range(interfaces_count):
-        raise NotImplementedError("We don't support interfaces")
+        interface = {'index' : parse_i2(f)}
+        interfaces.append(interface)
     return interfaces
 
-def parse_fields(f, interfaces_count):
-    interfaces = []
-    for i in range(interfaces_count):
-        raise NotImplementedError("We don't support interfaces")
-    return interfaces
+def parse_fields(constant_pool, f, fields_count):
+    fields = []
+    for i in range(fields_count):
+        field = {}
+        field['access_flags'] = parse_i2(f)
+        field['name_index'] = parse_i2(f)
+        field['descriptor_index'] = parse_i2(f)
+        attributes_count = parse_i2(f)
+        field['attributes'] = parse_attributes(constant_pool, f, attributes_count)
+        fields.append(field)
+    return fields
 
 def parse_class_file(file_path):
     with open(file_path, "rb") as f:
@@ -289,12 +298,10 @@ def parse_class_file(file_path):
         this_class = parse_i2(f)
         super_class = parse_i2(f)
         
-        interfaces_count = parse_i2(f)
+        interfaces_count = int.from_bytes(f.read(2), byteorder='little')
         interfaces = parse_interfaces(f, interfaces_count)
-        fields_count = parse_i2(f)
-        fields = parse_fields(f, fields_count)
-        
-        clazz = JVMClassFile(version, constant_pool, None, None, None, access_flags, this_class, super_class)
+        fields_count = int.from_bytes(f.read(2), byteorder='little')
+        fields = parse_fields(constant_pool, f, fields_count)
         
         methods_count = parse_i2(f)
         methods = []
@@ -311,16 +318,13 @@ def parse_class_file(file_path):
             method['descriptor_index'] = parse_i2(f)
             lookup_key = (method['name_index'], method['descriptor_index'])
             attributes_count = parse_i2(f)
-            method['attributes'] = parse_attributes(clazz, f, attributes_count)
+            method['attributes'] = parse_attributes(constant_pool, f, attributes_count)
             methods.append(method)
             methods_lookup[lookup_key] = method
-        clazz.methods = methods
-        clazz.methods_lookup = methods_lookup
         
         attributes_count = parse_i2(f)
-        attributes = parse_attributes(clazz, f, attributes_count)
-        clazz.attributes = attributes
-        return clazz
+        attributes = parse_attributes(constant_pool, f, attributes_count)
+        return JVMClassFile(version, constant_pool, methods, methods_lookup, attributes, access_flags, this_class, super_class, interfaces, fields)
 
 def find_methods_by_name(clazz : JVMClassFile, name: bytes):
     assert clazz.methods is not None, "Class methods not parsed"
