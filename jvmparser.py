@@ -247,8 +247,16 @@ def parse_constant_pool(f, constant_pool_count) -> list:
             cp_info['bytes'] = parse_f4(f)
         elif Constant.CONSTANT_Integer == constant_tag:
             cp_info['bytes'] = parse_i4(f)
+        elif Constant.CONSTANT_Long == constant_tag:
+            high_bytes = parse_i4(f)
+            low_bytes = parse_i4(f)
+            cp_info['bytes'] = (high_bytes << 32) + low_bytes
+        elif Constant.CONSTANT_Double == constant_tag:
+            high_bytes = parse_i4(f)
+            low_bytes = parse_i4(f)
+            cp_info['bytes'] = (high_bytes << 32) + low_bytes
         else:
-            raise NotImplementedError(f"Unexpected constant tag {tag_byte} in class file.")
+            raise NotImplementedError(f"Unexpected constant tag {constant_tag} in class file.")
         cp_info['tag'] = constant_tag.name
         constant_pool.append(cp_info)
     return constant_pool
