@@ -100,6 +100,7 @@ class Opcode(Enum):
     fconst_1 = 0xC
     fconst_2 = 0xD
     
+    istore = 0x36
     istore_0 = 0x3B
     istore_1 = 0x3C
     istore_2 = 0x3D
@@ -110,6 +111,7 @@ class Opcode(Enum):
     fstore_2 = 0x45
     fstore_3 = 0x46
     
+    iload = 0x15
     iload_0 = 0x1A
     iload_1 = 0x1B
     iload_2 = 0x1C

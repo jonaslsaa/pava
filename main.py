@@ -6,6 +6,7 @@ import os
 import io
 from pprint import pprint
 from enum import Enum, auto
+from time import perf_counter_ns
 from typing import Any, List, Tuple
 
 from jvmconsts import *
@@ -256,6 +257,10 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 frame.stack.append(v3)
             elif Opcode.aconst_null == opcode:
                 frame.stack.append(Operand(type=OperandType.REFERENCE, value=None))
+            elif Opcode.istore == opcode:
+                index = parse_u1(f)
+                operand = pop_expected(frame.stack, OperandType.INT)
+                frame.local_vars[index] = operand
             elif Opcode.istore_0 == opcode:
                 frame.local_vars[0] = pop_expected(frame.stack, OperandType.INT)
             elif Opcode.istore_1 == opcode:
@@ -272,6 +277,9 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 frame.local_vars[2] = pop_expected(frame.stack, OperandType.FLOAT)
             elif Opcode.fstore_3 == opcode:
                 frame.local_vars[3] = pop_expected(frame.stack, OperandType.FLOAT)
+            elif Opcode.iload == opcode:
+                index = parse_u1(f)
+                frame.stack.append(frame.local_vars[index])
             elif Opcode.iload_0 == opcode:
                 frame.stack.append(frame.local_vars[0])
             elif Opcode.iload_1 == opcode:
@@ -432,7 +440,6 @@ if __name__ == '__main__':
         exit(1)
     main_class = parse_class_file(file_path)
     assert main_class.methods is not None, "Main class has no methods"
-    pprint(main_class)
     for method in  main_class.methods:
         method_name = from_cp(main_class.constant_pool, method['name_index'])['bytes'].decode('utf-8')
         if method_name not in ('<init>', 'main'): continue
@@ -441,10 +448,12 @@ if __name__ == '__main__':
                 print(f"   Method {method_name}")
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
+                start_timer = perf_counter_ns()
                 exec_info = execute_method(main_class, code_attr, has_this=method_name == '<init>')
-                print(f"   Executed {exec_info.op_count} operations.")
+                end_timer = perf_counter_ns()
+                print(f"   Executed {exec_info.op_count} operations in {(end_timer - start_timer) / 1000000:.2f} ms")
     
-    print_constant_pool(main_class.constant_pool, expand=False)
+    #print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')

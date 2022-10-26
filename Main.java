@@ -1,10 +1,18 @@
-public abstract class Main {
+public class Main {
     public static void main(String[] args) {
-        //double b = 4;
-        int a = 2;
-        //System.out.println(b);
-        System.out.println(a);
-        //String s = "Hello";
-        //System.out.println(s + " World!");
+        int a = 3;
+        int b = 4;
+        int acc = 0;
+        for (int i = 0; i < 3; i++) {
+            acc += i*a + i*b;
+        }
+        System.out.println(acc);
+       // System.out.println(Test.add(a, b));
+    }
+}
+
+class Test {
+    public static int add(int a, int b) {
+        return a + b;
     }
 }
