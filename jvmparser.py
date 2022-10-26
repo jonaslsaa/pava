@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 from io import BufferedReader
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Tuple, Union, Dict
 from pprint import pprint
 
 from jvmconsts import *
@@ -27,6 +27,13 @@ class AttributeInfoName(Enum):
     CODE = b'Code'
     LINE_NUMBER_TABLE = b'LineNumberTable'
     STACK_MAP_TABLE = b'StackMapTable'
+    CONSTANT_VALUE = b'ConstantValue'
+    SIGNATURE = b'Signature'
+    RUNTIME_VISIBLE_ANNOTATIONS = b'RuntimeVisibleAnnotations'
+    LOCAL_VARIABLE_TABLE = b'LocalVariableTable'
+    LOCAL_VARIABLE_TYPE_TABLE = b'LocalVariableTypeTable'
+    EXCEPTIONS = b'Exceptions'
+    NEST_MEMBERS = b'NestMembers'
 
 def get_name_of_class(constant_pool : List[dict], class_index: int) -> str:
     return constant_pool[constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
@@ -95,6 +102,20 @@ def parse_attribute_info(constant_pool : List[dict], attr_name : bytes, info_byt
             return parse_attribute_info_LineNumberTable(constant_pool, attr_info_stream)
         case AttributeInfoName.STACK_MAP_TABLE:
             return parse_attribute_info_StackMapTable(constant_pool, attr_info_stream)
+        case AttributeInfoName.CONSTANT_VALUE:
+            return parse_attribute_info_ConstantValue(constant_pool, attr_info_stream)
+        case AttributeInfoName.SIGNATURE:
+            return parse_attribute_info_Signature(constant_pool, attr_info_stream)
+        case AttributeInfoName.RUNTIME_VISIBLE_ANNOTATIONS:
+            return parse_attribute_info_RuntimeVisibleAnnotations(constant_pool, attr_info_stream)
+        case AttributeInfoName.LOCAL_VARIABLE_TABLE:
+            return {}
+        case AttributeInfoName.LOCAL_VARIABLE_TYPE_TABLE:
+            return {}
+        case AttributeInfoName.EXCEPTIONS:
+            return parse_attribute_info_Exceptions(constant_pool, attr_info_stream)
+        case AttributeInfoName.NEST_MEMBERS:
+            return parse_attribute_info_NestMembers(constant_pool, attr_info_stream)
         case _:
             raise NotImplementedError(f'attribute {attr_name} is not implemented')
 
@@ -194,12 +215,107 @@ def parse_attribute_info_Code(constant_pool : List[dict], f : io.BytesIO) -> dic
     code_length = parse_i4(f)
     code_attribute['code'] = f.read(code_length)
     exception_table_length = parse_i2(f)
-    for i in range(exception_table_length):
-        raise NotImplementedError("We don't support exception tables")
+    exception_table = []
+    for _ in range(exception_table_length):
+        exception_table.append({
+            'start_pc': parse_i2(f),
+            'end_pc': parse_i2(f),
+            'handler_pc': parse_i2(f),
+            'catch_type': parse_i2(f)
+        })
     attributes_count = parse_i2(f)
     code_attribute['attributes'] = parse_attributes(constant_pool, f, attributes_count)
     # NOTE: parsing the code attribute is not finished
     return code_attribute
+
+def parse_attribute_info_ConstantValue(constant_pool : List[dict], f : io.BytesIO):
+    return {'constantvalue_index': parse_i2(f)}
+
+def parse_attribute_info_Signature(constant_pool : List[dict], f : io.BytesIO):
+    return {'signature_index': parse_i2(f)}
+
+def parse_attribute_info_RuntimeVisibleAnnotations(constant_pool : List[dict], f : io.BytesIO):
+    attr = {}
+    attr['num_annotations'] = parse_i2(f)
+    annotations = []
+    for i in range(attr['num_annotations']):
+        annotations.append(parse_annotation(constant_pool, f))
+    attr['annotations'] = annotations
+    return attr
+
+def parse_annotation(constant_pool : List[dict], f : io.BytesIO):
+    annotation : Dict[str, Any] = {
+            'type_index': parse_i2(f),
+        }
+    annotation['num_element_value_pairs'] = parse_i2(f)
+    element_value_pairs = []
+    for j in range(annotation['num_element_value_pairs']):
+        element_value_pairs.append({
+            'element_name_index': parse_i2(f),
+            'value': parse_element_value(constant_pool, f),
+        })
+    annotation['element_value_pairs'] = element_value_pairs
+    return annotation
+
+def parse_element_value(constant_pool : List[dict], f : io.BytesIO):
+    tag = parse_i1(f)
+    if tag == 66:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 67:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 68:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 70:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 73:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 74:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 83:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 90:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 115:
+        return {'const_value_index': parse_i2(f)}
+    elif tag == 101:
+        return {'enum_const_value': {
+            'type_name_index': parse_i2(f),
+            'const_name_index': parse_i2(f),
+        }}
+    elif tag == 99:
+        return {'class_info_index': parse_i2(f)}
+    elif tag == 64:
+        return {'annotation_value': parse_annotation(constant_pool, f)}
+    elif tag == 91:
+        return {'array_value': parse_array_value(constant_pool, f)}
+    else:
+        raise NotImplementedError("We don't support element value tag %d" % tag)
+
+def parse_array_value(constant_pool : List[dict], f : io.BytesIO):
+    array_value = {}
+    array_value['num_values'] = parse_i2(f)
+    values = []
+    for i in range(array_value['num_values']):
+        values.append(parse_element_value(constant_pool, f))
+    array_value['values'] = values
+    return array_value
+
+def parse_attribute_info_Exceptions(constant_pool : List[dict], f : io.BytesIO):
+    attr = {}
+    attr['number_of_exceptions'] = parse_i2(f)
+    attr['exception_index_table'] = []
+    for i in range(attr['number_of_exceptions']):
+        attr['exception_index_table'].append(parse_i2(f))
+    return attr
+
+
+def parse_attribute_info_NestMembers(constant_pool : List[dict], f : io.BytesIO):
+    attr = {}
+    attr['number_of_classes'] = parse_i2(f)
+    attr['classes'] = []
+    for i in range(attr['number_of_classes']):
+        attr['classes'].append(parse_i2(f))
+    return attr
 
 def print_constant_pool(constant_pool : List[dict], expand : bool = False):
     def expand_index(index):
@@ -257,6 +373,9 @@ def parse_constant_pool(f, constant_pool_count) -> list:
             high_bytes = parse_i4(f)
             low_bytes = parse_i4(f)
             cp_info['bytes'] = (high_bytes << 32) + low_bytes
+        elif Constant.CONSTANT_InterfaceMethodref == constant_tag:
+            cp_info['class_index'] = parse_i2(f)
+            cp_info['name_and_type_index'] = parse_i2(f)
         else:
             raise NotImplementedError(f"Unexpected constant tag {constant_tag} in class file.")
         cp_info['tag'] = constant_tag.name

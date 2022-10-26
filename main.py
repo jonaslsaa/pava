@@ -163,8 +163,18 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     raise RuntimeError("invokedynamic arguments are not 0")
                 dynamic_cp = from_cp(clazz.constant_pool, cp_index)
                 assert dynamic_cp['tag'] == Constant.CONSTANT_InvokeDynamic.name, "invokedynamic index is not CONSTANT_InvokeDynamic"
-                bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
+               
                 name_and_type = from_cp(clazz.constant_pool, dynamic_cp['name_and_type_index'])
+                method_name = clazz.constant_pool[name_and_type['name_index']-1]['bytes'].decode('utf-8')
+                method_signature = clazz.constant_pool[name_and_type['descriptor_index']-1]['bytes'].decode('utf-8')
+                key = (method_name, method_signature)
+                
+                bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
+                class_index = from_cp(clazz.constant_pool, from_cp(clazz.constant_pool, bootstrap_method_attr['bootstrap_method_ref'])['reference_index'])['class_index']
+                class_name = get_name_of_class(clazz.constant_pool, class_index)
+                referenced_class = loaded_classes[class_name]
+                print(f"invokedynamic {class_name} | {method_name} | {method_signature}")
+                method = referenced_class.methods_lookup[key]
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
                 
@@ -452,9 +462,14 @@ def load_class_from_file(file_path : str) -> Tuple[JVMClassFile, Dict[str, JVMCl
             name_index = const['name_index']
             class_name = from_cp(main_class.constant_pool, name_index)['bytes'].decode('utf-8')
             
-            if 'java/' in class_name: continue # NOTE: skip java classes for now
+            path_prefix = ""
+            if 'java/' in class_name:
+                print(f"Found java class {class_name}")
+                path_prefix = 'java.base/'
+                if 'String' not in class_name:
+                    continue # NOTE: skip java classes for now
             
-            all_classes[class_name] = parse_class_file(class_name + '.class')
+            all_classes[class_name] = parse_class_file(path_prefix + class_name + '.class')
             print("Loaded class:", class_name)
             #pprint(all_classes[name_index])
     return main_class, all_classes
