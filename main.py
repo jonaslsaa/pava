@@ -34,6 +34,7 @@ class ExecutionReturnInfo:
     return_value : Operand | None = None
 
 #ex: (II)I -> ((OperandType.INT, OperandType.INT), OperandType.INT)
+# READ: https://stackoverflow.com/questions/9909228/what-does-v-mean-in-a-class-signature
 def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
     if sig[0] == '(':
         sig = sig[1:]
@@ -167,13 +168,14 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 name_and_type = from_cp(clazz.constant_pool, dynamic_cp['name_and_type_index'])
                 method_name = clazz.constant_pool[name_and_type['name_index']-1]['bytes'].decode('utf-8')
                 method_signature = clazz.constant_pool[name_and_type['descriptor_index']-1]['bytes'].decode('utf-8')
-                key = (method_name, method_signature)
                 
                 bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
+                print('bootstrap_method_attr', bootstrap_method_attr)
                 class_index = from_cp(clazz.constant_pool, from_cp(clazz.constant_pool, bootstrap_method_attr['bootstrap_method_ref'])['reference_index'])['class_index']
                 class_name = get_name_of_class(clazz.constant_pool, class_index)
                 referenced_class = loaded_classes[class_name]
                 print(f"invokedynamic {class_name} | {method_name} | {method_signature}")
+                key = (method_name, method_signature)
                 method = referenced_class.methods_lookup[key]
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
@@ -489,7 +491,7 @@ if __name__ == '__main__':
     
     main_class, loaded_classes = load_class_from_file(file_path)
     
-    print_constant_pool(main_class.constant_pool, expand=False)
+    #print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')
