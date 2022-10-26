@@ -167,7 +167,6 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 name_and_type = from_cp(clazz.constant_pool, dynamic_cp['name_and_type_index'])
                 print(f"Bootstrap method: {bootstrap_method_attr}")
                 print(f"Name and type: {name_and_type}")
-                print_constant_pool(clazz.constant_pool)
                 
                 raise NotImplementedError("invokedynamic is not implemented")
             elif Opcode.invokestatic == opcode:

@@ -272,7 +272,7 @@ def parse_interfaces(f, interfaces_count):
 
 def parse_fields(constant_pool, f, fields_count):
     fields = []
-    for i in range(fields_count):
+    for _ in range(fields_count):
         field = {}
         field['access_flags'] = parse_i2(f)
         field['name_index'] = parse_i2(f)
@@ -298,9 +298,9 @@ def parse_class_file(file_path : str) -> JVMClassFile:
         this_class = parse_i2(f)
         super_class = parse_i2(f)
         
-        interfaces_count = int.from_bytes(f.read(2), byteorder='little')
+        interfaces_count = int.from_bytes(f.read(2), byteorder='little') # NOTE: what the hell is this?
         interfaces = parse_interfaces(f, interfaces_count)
-        fields_count = int.from_bytes(f.read(2), byteorder='little')
+        fields_count = parse_i2(f)
         fields = parse_fields(constant_pool, f, fields_count)
         
         methods_count = parse_i2(f)
@@ -321,7 +321,6 @@ def parse_class_file(file_path : str) -> JVMClassFile:
             method_name = constant_pool[method['name_index']-1]['bytes'].decode('utf-8')
             method_signature = constant_pool[method['descriptor_index']-1]['bytes'].decode('utf-8')
             lookup_key = (method_name, method_signature)
-            print(f"Method {lookup_key}")
             
             attributes_count = parse_i2(f)
             method['attributes'] = parse_attributes(constant_pool, f, attributes_count)
