@@ -28,11 +28,11 @@ class AttributeInfoName(Enum):
     LINE_NUMBER_TABLE = b'LineNumberTable'
     STACK_MAP_TABLE = b'StackMapTable'
 
-def get_name_of_class(clazz, class_index: int) -> str:
-    return clazz.constant_pool[clazz.constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+def get_name_of_class(constant_pool : List[dict], class_index: int) -> str:
+    return constant_pool[constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
-def get_name_of_member(clazz, name_and_type_index: int) -> str:
-    return clazz.constant_pool[clazz.constant_pool[name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+def get_name_of_member(constant_pool : List[dict], name_and_type_index: int) -> str:
+    return constant_pool[constant_pool[name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
 
 CACHED_ATTR_INSTANCES = {}
 
@@ -282,7 +282,7 @@ def parse_fields(constant_pool, f, fields_count):
         fields.append(field)
     return fields
 
-def parse_class_file(file_path):
+def parse_class_file(file_path : str) -> JVMClassFile:
     with open(file_path, "rb") as f:
         magic = hex(parse_i4(f))
         if magic != '0xcafebabe':
@@ -316,7 +316,13 @@ def parse_class_file(file_path):
             method['access_flags'] = parse_flags(parse_i2(f), METHOD_ACCESS_FLAGS)
             method['name_index'] = parse_i2(f)
             method['descriptor_index'] = parse_i2(f)
-            lookup_key = (method['name_index'], method['descriptor_index'])
+            
+            #this_class_name = from_cp(constant_pool, constant_pool[this_class-1]['name_index'])['bytes'].decode('utf-8')
+            method_name = constant_pool[method['name_index']-1]['bytes'].decode('utf-8')
+            method_signature = constant_pool[method['descriptor_index']-1]['bytes'].decode('utf-8')
+            lookup_key = (method_name, method_signature)
+            print(f"Method {lookup_key}")
+            
             attributes_count = parse_i2(f)
             method['attributes'] = parse_attributes(constant_pool, f, attributes_count)
             methods.append(method)

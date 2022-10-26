@@ -7,7 +7,7 @@ import io
 from pprint import pprint
 from enum import Enum, auto
 from time import perf_counter_ns
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Dict
 
 from jvmconsts import *
 from jvmparser import AttributeInfoName, JVMClassFile, parse_class_file
@@ -76,10 +76,7 @@ class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
-    assert clazz.methods_lookup is not None, "No methods lookup table"
-    assert clazz.methods is not None, "No methods"
-    assert clazz.attributes is not None, "No attributes"
+def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile], code_attr : dict, has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
     code = code_attr['code']
     frame = Frame(stack=[],
                   local_vars=[])
@@ -111,8 +108,8 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
             if Opcode.getstatic == opcode:
                 index = parse_i2(f)
                 fieldref = from_cp(clazz.constant_pool, index)
-                name_of_class = get_name_of_class(clazz, fieldref['class_index'])
-                name_of_member = get_name_of_member(clazz, fieldref['name_and_type_index'])
+                name_of_class = get_name_of_class(clazz.constant_pool, fieldref['class_index'])
+                name_of_member = get_name_of_member(clazz.constant_pool, fieldref['name_and_type_index'])
                 if name_of_class == 'java/lang/System' and name_of_member == 'out':
                     frame.stack.append(Operand(type=OperandType.OBJECT, value=b"FakePrintStream"))
                 else:
@@ -131,8 +128,8 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
             elif Opcode.invokevirtual == opcode:
                 index = parse_i2(f)
                 methodref = from_cp(clazz.constant_pool, index)
-                name_of_class = get_name_of_class(clazz, methodref['class_index'])
-                name_of_member = get_name_of_member(clazz, methodref['name_and_type_index']);
+                name_of_class = get_name_of_class(clazz.constant_pool, methodref['class_index'])
+                name_of_member = get_name_of_member(clazz.constant_pool, methodref['name_and_type_index']);
                 if name_of_class == 'java/io/PrintStream' and name_of_member in ('print', 'println'):
                     n = len(frame.stack)
                     if len(frame.stack) < 2:
@@ -179,31 +176,33 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
                 cp_index = u16_to_i16((indexbyte1 << 8) + indexbyte2)
                 static_cp = from_cp(clazz.constant_pool, cp_index)
                 assert static_cp['tag'] == Constant.CONSTANT_Methodref.name, "invokestatic index is not CONSTANT_Methodref"
-                class_index = static_cp['class_index'] # We will assume same class file for now, in future we might need to look up other CP pools, etc. in other files
-                name_and_type_index = static_cp['name_and_type_index']
-                name_and_type = from_cp(clazz.constant_pool, name_and_type_index)
-                key = (name_and_type['name_index'], name_and_type['descriptor_index'])
-                method = clazz.methods_lookup[key]
-                
-                method_descriptor = from_cp(clazz.constant_pool, method['descriptor_index'])['bytes'].decode('utf-8')
-                method_signature = parse_signature(method_descriptor)
+                class_index = static_cp['class_index']
+                class_name = get_name_of_class(clazz.constant_pool, class_index)
+                referenced_class = loaded_classes[class_name]
+                name_and_type = from_cp(clazz.constant_pool, static_cp['name_and_type_index'])
+                method_name = clazz.constant_pool[name_and_type['name_index']-1]['bytes'].decode('utf-8')
+                method_signature = clazz.constant_pool[name_and_type['descriptor_index']-1]['bytes'].decode('utf-8')
+                key = (method_name, method_signature)
+                method = referenced_class.methods_lookup[key]
+            
+                parsed_signature = parse_signature(method_signature)
 
                 code_attr = method['attributes'][0]
                 assert code_attr['_name'] == b'Code', "invokestatic method is not Code"
                 # pop arguments from stack
                 args = []
-                for arg_type in method_signature[0]:
+                for arg_type in parsed_signature[0]:
                     v = frame.stack.pop()
                     assert v.type == arg_type, f"invokestatic argument type mismatch: expected {arg_type}, got {v.type}"
                     args.append(v)
                 # run the method
-                ret = execute_method(clazz, code_attr['info'], passed_vars=args)
+                ret = execute_method(clazz, loaded_classes, code_attr['info'], passed_vars=args)
 
                 operations_count += ret.op_count
                 # push return value to stack
                 ret_v = ret.return_value
                 if ret_v is not None:
-                    assert method_signature[1] == ret_v.type, f"invokestatic return type mismatch: expected {method_signature[1]}, got {ret_v.type}"
+                    assert parsed_signature[1] == ret_v.type, f"invokestatic return type mismatch: expected {parsed_signature[1]}, got {ret_v.type}"
                     frame.stack.append(ret_v)
             elif Opcode.invokespecial == opcode:
                 # NOTE: unfinishe
@@ -426,6 +425,41 @@ def execute_method(clazz : JVMClassFile, code_attr : dict, has_this=False, passe
             #pprint(frame.local_vars)
         raise Exception("Reached end of method without an op_return")
 
+
+def run_class_main(main_class : JVMClassFile, loaded_classes : Dict[str, JVMClassFile]):
+    assert main_class.methods is not None, "Main class has no methods"
+    for method in  main_class.methods:
+        method_name = from_cp(main_class.constant_pool, method['name_index'])['bytes'].decode('utf-8')
+        if method_name not in ('main'): continue    # NOTE: should we run some (static) init method?
+        for attr in method['attributes']:
+            if attr['_name'] == AttributeInfoName.CODE.value:
+                print(f"   Method {method_name}")
+                code_attr = attr['info']
+                assert 'code' in code_attr, "Code attribute has no code"
+                start_timer = perf_counter_ns()
+                exec_info = execute_method(main_class, loaded_classes, code_attr, has_this=method_name == '<init>')
+                end_timer = perf_counter_ns()
+                print(f"   Executed {exec_info.op_count} operations in {(end_timer - start_timer) / 1000000:.2f} ms")
+
+
+def load_class_from_file(file_path : str) -> Tuple[JVMClassFile, Dict[str, JVMClassFile]]:
+    main_class_name = file_path.split('.')[0]
+    main_class = parse_class_file(file_path)
+    all_classes : Dict[str, JVMClassFile] = {main_class_name: main_class}
+    for i, const in enumerate(main_class.constant_pool):
+        if const['tag'] == Constant.CONSTANT_Class.name:    
+            if (i+1) == main_class.this_class:
+                continue # Skip main class, we already have it
+            name_index = const['name_index']
+            class_name = from_cp(main_class.constant_pool, name_index)['bytes'].decode('utf-8')
+            
+            if 'java/' in class_name: continue # NOTE: skip java classes for now
+            
+            all_classes[class_name] = parse_class_file(class_name + '.class')
+            print("Loaded class:", class_name)
+            #pprint(all_classes[name_index])
+    return main_class, all_classes
+
 if __name__ == '__main__':
     program, *args = sys.argv
     if len(args) != 1:
@@ -438,23 +472,13 @@ if __name__ == '__main__':
     if not os.path.exists(file_path):
         print(f"ERROR: file {file_path} does not exist")
         exit(1)
-    main_class = parse_class_file(file_path)
-    assert main_class.methods is not None, "Main class has no methods"
-    for method in  main_class.methods:
-        method_name = from_cp(main_class.constant_pool, method['name_index'])['bytes'].decode('utf-8')
-        if method_name not in ('<init>', 'main'): continue
-        for attr in method['attributes']:
-            if attr['_name'] == AttributeInfoName.CODE.value:
-                print(f"   Method {method_name}")
-                code_attr = attr['info']
-                assert 'code' in code_attr, "Code attribute has no code"
-                start_timer = perf_counter_ns()
-                exec_info = execute_method(main_class, code_attr, has_this=method_name == '<init>')
-                end_timer = perf_counter_ns()
-                print(f"   Executed {exec_info.op_count} operations in {(end_timer - start_timer) / 1000000:.2f} ms")
     
-    #print_constant_pool(main_class.constant_pool, expand=False)
+    main_class, loaded_classes = load_class_from_file(file_path)
+    
+    print_constant_pool(main_class.constant_pool, expand=False)
     #print('Attributes:')
     #pprint(clazz.attributes)
     #print('Methods:')
     #pprint(clazz.methods)
+    
+    run_class_main(main_class, loaded_classes)
