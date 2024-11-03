@@ -449,8 +449,7 @@ def parse_class_file(file_path : str) -> JVMClassFile:
             method_name = constant_pool[method['name_index']-1]['bytes'].decode('utf-8')
             method_signature = constant_pool[method['descriptor_index']-1]['bytes'].decode('utf-8')
             lookup_key = (method_name, method_signature)
-            print(f"Method {lookup_key}")
-            
+                        
             attributes_count = parse_i2(f)
             method['attributes'] = parse_attributes(constant_pool, f, attributes_count)
             methods.append(method)

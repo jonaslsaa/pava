@@ -128,11 +128,19 @@ class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile], code_attr_info : dict, runtime_classes: Dict[str, RuntimeClass], has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
+def execute_method(clazz : JVMClassFile,
+                    loaded_classes : Dict[str, JVMClassFile],
+                    code_attr_info : dict,
+                    runtime_classes: Dict[str, RuntimeClass],
+                    has_this=False,
+                    passed_vars : List[Operand]=[]
+                ) -> ExecutionReturnInfo:
+    clazz_name = get_name_of(clazz.constant_pool, clazz.this_class)
+    print(f"   execute_method (class: {clazz_name})")
     assert len(code_attr_info.keys()) > 0, "Code attribute is empty"
+    
     code = code_attr_info['code']
-    frame = Frame(stack=[],
-                  local_vars=[])
+    frame = Frame(stack=[], local_vars=[])
 
     # Reference to 'this' object
     if has_this:
@@ -182,8 +190,9 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     initialize_runtime_class(c, loaded_classes, runtime_classes)
                     # Look after a method
                     if key in c.methods_lookup:
-                        raise NotImplementedError("Method not implemented")
-                        # frame.stacks.append(Operand(type=OperandType.REFERENCE, value=fully_qualified_name))
+                        # Get fully qualified name of the method FROM the class file packageName/ClassName.methodName:(parameterTypes)returnType
+                        fully_qualified_name = f"{name_of_class}.{name_of_member}:{signature_or_type}"
+                        frame.stack.append(Operand(type=OperandType.REFERENCE, value=fully_qualified_name))
                     # Look after a field
                     elif key in c.fields_lookup:
                         # Get the field value from the runtime class
@@ -206,6 +215,9 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     frame.stack.append(Operand(type=OperandType.INT, value=v['bytes']))
                 elif v['tag'] == Constant.CONSTANT_Float.name:
                     frame.stack.append(Operand(type=OperandType.FLOAT, value=v['bytes']))
+                elif v['tag'] == Constant.CONSTANT_Class.name:
+                    name_of_class = get_name_of(clazz.constant_pool, index) # TODO: is this correct?
+                    frame.stack.append(Operand(type=OperandType.REFERENCE, value=name_of_class))
                 else:
                     raise NotImplementedError(f"Unsupported constant {v['tag']} in ldc instruction")
             elif Opcode.invokevirtual == opcode:
@@ -288,7 +300,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     assert v.type == arg_type, f"invokestatic argument type mismatch: expected {arg_type}, got {v.type}"
                     args.append(v)
                 # run the method
-                ret = execute_method(clazz, loaded_classes, code_attr['info'], runtime_classes, passed_vars=args)
+                ret = execute_method(referenced_class, loaded_classes, code_attr['info'], runtime_classes, passed_vars=args)
 
                 operations_count += ret.op_count
                 # push return value to stack
@@ -544,7 +556,6 @@ def run_class_main(main_class : JVMClassFile, loaded_classes : Dict[str, JVMClas
         if method_name not in ('main'): continue    # NOTE: should we run some (static) init method?
         for attr in method['attributes']:
             if attr['_name'] == AttributeInfoName.CODE.value:
-                print(f"   Method {method_name}")
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
                 start_timer = perf_counter_ns()
