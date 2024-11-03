@@ -1,6 +1,11 @@
 public class Main {
+    static int a = 1;
     public static void main(String[] args) {
-        String a = "Hello";
-        System.out.println(a + " World!");
+        setA(2);
+        System.out.println(a);
+    }
+
+    public static void setA(int b) {
+        a += b;
     }
 }

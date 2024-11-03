@@ -10,8 +10,8 @@ from time import perf_counter_ns
 from typing import Any, List, Tuple, Dict
 
 from jvmconsts import *
-from jvmparser import AttributeInfoName, JVMClassFile, parse_class_file
-from jvmparser import print_constant_pool, get_name_of_class, get_name_of_member, from_bsm, from_cp
+from jvmparser import AttributeInfoName, JVMClassFile, get_type_of_member, parse_class_file, parse_flags
+from jvmparser import print_constant_pool, get_name_of, get_name_of, from_bsm, from_cp
 from utils import *
 
 class OperandType(Enum):
@@ -22,6 +22,7 @@ class OperandType(Enum):
     DOUBLE = auto()
     REFERENCE = auto()
     RETURN_ADDR = auto()
+    VOID = auto()
 
 @dataclass(frozen=True, slots=True)
 class Operand:
@@ -32,39 +33,47 @@ class Operand:
 class ExecutionReturnInfo:
     op_count : int
     return_value : Operand | None = None
+    
+@dataclass
+class RuntimeClass:
+    class_file: JVMClassFile
+    static_fields : Dict[str, Operand]
+
+def sig_char_to_operand_types(char : str):
+    if char == 'I':
+        return OperandType.INT
+    elif char == 'J':
+        return OperandType.LONG
+    elif char == 'F':
+        return OperandType.FLOAT
+    elif char == 'D':
+        return OperandType.DOUBLE
+    elif char == 'V':
+        return OperandType.VOID
+    elif char == 'L':
+        return OperandType.REFERENCE
+    return None
 
 #ex: (II)I -> ((OperandType.INT, OperandType.INT), OperandType.INT)
 # READ: https://stackoverflow.com/questions/9909228/what-does-v-mean-in-a-class-signature
 def parse_signature(sig : str) -> Tuple[List[OperandType], OperandType]:
-    if sig[0] == '(':
+    sig = sig[1:] # skip the '('
+    # Parse the arguments
+    args : List[OperandType] = []
+    while sig[0] != ')':
+        _type = sig_char_to_operand_types(sig[0])
+        if _type is None:
+            raise RuntimeError(f"Unknown signature type: {sig[0]}")
+        args.append(_type)
         sig = sig[1:]
-        args : List[OperandType] = []
-        while sig[0] != ')':
-            if sig[0] == 'I':
-                args.append(OperandType.INT)
-            elif sig[0] == 'J':
-                args.append(OperandType.LONG)
-            elif sig[0] == 'F':
-                args.append(OperandType.FLOAT)
-            elif sig[0] == 'D':
-                args.append(OperandType.DOUBLE)
-            else:
-                raise RuntimeError(f"Unknown signature type: {sig[0]}")
-            sig = sig[1:]
-        sig = sig[1:]
-        if sig[0] == 'I':
-            return_type = OperandType.INT
-        elif sig[0] == 'J':
-            return_type = OperandType.LONG
-        elif sig[0] == 'F':
-            return_type = OperandType.FLOAT
-        elif sig[0] == 'D':
-            return_type = OperandType.DOUBLE
-        else:
-            raise RuntimeError(f"Unknown signature return type: {sig[0]}")
-        return (args, return_type)
-    else:
-        raise RuntimeError(f"Invalid signature: {sig}")
+    sig = sig[1:] # skip the ')'
+    # Parse the return type
+    return_type = sig_char_to_operand_types(sig[0])
+    if return_type is None:
+        raise RuntimeError(f"Unknown signature return type: {sig[0]}")
+    sig = sig[1:]
+    assert len(sig) == 0, "Invalid signature: trailing characters"
+    return (args, return_type)
 
 def pop_expected(stack : List[Operand], expected_type : OperandType):
     assert len(stack) > 0, "Stack underflow"
@@ -72,13 +81,56 @@ def pop_expected(stack : List[Operand], expected_type : OperandType):
         raise RuntimeError(f"Expected {expected_type} on stack, but found {stack[-1].type}")
     return stack.pop()
 
+def initialize_runtime_class(class_file: JVMClassFile, loaded_classes: Dict[str, JVMClassFile], runtime_classes: Dict[str, RuntimeClass]):
+    # Get name of this class
+    class_name = get_name_of(class_file.constant_pool, class_file.this_class)
+    if class_name in runtime_classes:
+        return # Already initialized
+    # Initialize the static fields dictionary with default values based on type
+    static_fields = {}
+
+    # Iterate over all fields to set default values (e.g., int -> 0)
+    for field_info in class_file.fields:
+        field_name = get_name_of(class_file.constant_pool, field_info['name_index'])
+        field_type = get_type_of_member(class_file.constant_pool, field_info['descriptor_index'])
+
+        access_flags = parse_flags(field_info['access_flags'], METHOD_ACCESS_FLAGS)
+        if 'ACC_STATIC' in access_flags:
+            # Assign default values
+            if field_type == 'I':  # int
+                static_fields[field_name] = Operand(OperandType.INT, 0)
+            elif field_type == 'F':  # float
+                static_fields[field_name] = Operand(OperandType.FLOAT, 0.0)
+            elif field_type == 'J':  # long
+                static_fields[field_name] = Operand(OperandType.LONG, 0)
+            elif field_type == 'D':  # double
+                static_fields[field_name] = Operand(OperandType.DOUBLE, 0.0)
+            elif field_type.startswith('L') or field_type.startswith('['):  # object or array reference
+                static_fields[field_name] = Operand(OperandType.REFERENCE, None)
+            else:
+                raise NotImplementedError(f"Static field type {field_type} not implemented")
+
+    # Create the RuntimeClass with default-initialized static fields
+    runtime_class = RuntimeClass(class_file=class_file, static_fields=static_fields)
+    runtime_classes[get_name_of(class_file.constant_pool, class_file.this_class)] = runtime_class
+
+    # Look for the class initializer <clinit> to set any explicit values
+    for method in class_file.methods:
+        method_name = from_cp(class_file.constant_pool, method['name_index'])['bytes'].decode('utf-8')
+        if method_name == '<clinit>':
+            code_attr = next((attr for attr in method['attributes'] if attr['_name'] == b'Code'), None)
+            if code_attr:
+                # Execute the <clinit> method, which applies explicit field initializations
+                execute_method(class_file, loaded_classes, code_attr['info'], runtime_classes, has_this=False)
+
 @dataclass
 class Frame:
     stack: List[Operand] # the operand stack
     local_vars: list
 
-def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile], code_attr : dict, has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
-    code = code_attr['code']
+def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile], code_attr_info : dict, runtime_classes: Dict[str, RuntimeClass], has_this=False, passed_vars : List[Operand]=[]) -> ExecutionReturnInfo:
+    assert len(code_attr_info.keys()) > 0, "Code attribute is empty"
+    code = code_attr_info['code']
     frame = Frame(stack=[],
                   local_vars=[])
 
@@ -89,8 +141,18 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
     for var in passed_vars:
         frame.local_vars.append(var)
     
-    while len(frame.local_vars) < code_attr['max_locals']:
+    while len(frame.local_vars) < code_attr_info['max_locals']:
         frame.local_vars.append(None)
+        
+    def stack_trace():
+        nonlocal frame
+        print(f"--- Stack trace ---")
+        pprint(frame.stack)
+        print(f"--- Local vars ---")
+        pprint(frame.local_vars)
+        print(f"--- Runtime classes ---")
+        pprint(runtime_classes)
+        print(f"--- End stack trace ---")
         
     operations_count = 0
     with io.BytesIO(code) as f:
@@ -102,17 +164,37 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 #print("     Stack:", frame.stack)
                 print(f"{f.tell():4d} {opcode.name}")
             except ValueError:
-                print("   --- Stack trace ---")
-                pprint(frame.stack)
-                pprint(frame.local_vars)
+                stack_trace()
                 raise NotImplementedError(f"Unknown opcode {hex(opcode_byte)}")
             if Opcode.getstatic == opcode:
                 index = parse_i2(f)
-                fieldref = from_cp(clazz.constant_pool, index)
-                name_of_class = get_name_of_class(clazz.constant_pool, fieldref['class_index'])
-                name_of_member = get_name_of_member(clazz.constant_pool, fieldref['name_and_type_index'])
-                if name_of_class == 'java/lang/System' and name_of_member == 'out':
+                fieldref = from_cp(clazz.constant_pool,  index)
+                name_of_class = get_name_of(clazz.constant_pool, fieldref['class_index'])
+                name_of_member = get_name_of(clazz.constant_pool, fieldref['name_and_type_index'])
+                signature_or_type = get_type_of_member(clazz.constant_pool, fieldref['name_and_type_index'])
+                if name_of_class == 'java/lang/System' and name_of_member == 'out': # TODO: this is a hack
                     frame.stack.append(Operand(type=OperandType.OBJECT, value=b"FakePrintStream"))
+                # Find a field/method in a loaded class
+                elif name_of_class in loaded_classes:
+                    c = loaded_classes[name_of_class]
+                    key = (name_of_member, signature_or_type)
+                    # Check if class is initialized in the runtime
+                    initialize_runtime_class(c, loaded_classes, runtime_classes)
+                    # Look after a method
+                    if key in c.methods_lookup:
+                        raise NotImplementedError("Method not implemented")
+                        # frame.stacks.append(Operand(type=OperandType.REFERENCE, value=fully_qualified_name))
+                    # Look after a field
+                    elif key in c.fields_lookup:
+                        # Get the field value from the runtime class
+                        if name_of_class not in runtime_classes:
+                            raise RuntimeError(f"Class {name_of_class} not initialized")
+                        if name_of_member not in runtime_classes[name_of_class].static_fields:
+                            raise RuntimeError(f"Field {name_of_member} not initialized")
+                        field_value = runtime_classes[name_of_class].static_fields[name_of_member]
+                        frame.stack.append(field_value)
+                    else:
+                        raise NotImplementedError(f"Unknown getstatic {name_of_class}/{name_of_member}")
                 else:
                     raise NotImplementedError(f"Unsupported member {name_of_class}/{name_of_member} in getstatic instruction")
             elif Opcode.ldc == opcode:
@@ -129,10 +211,9 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
             elif Opcode.invokevirtual == opcode:
                 index = parse_i2(f)
                 methodref = from_cp(clazz.constant_pool, index)
-                name_of_class = get_name_of_class(clazz.constant_pool, methodref['class_index'])
-                name_of_member = get_name_of_member(clazz.constant_pool, methodref['name_and_type_index']);
+                name_of_class = get_name_of(clazz.constant_pool, methodref['class_index'])
+                name_of_member = get_name_of(clazz.constant_pool, methodref['name_and_type_index']);
                 if name_of_class == 'java/io/PrintStream' and name_of_member in ('print', 'println'):
-                    n = len(frame.stack)
                     if len(frame.stack) < 2:
                         raise RuntimeError('{name_of_class}/{name_of_member} expectes 2 arguments, but provided {n}')
                     obj = frame.stack[-2]
@@ -164,7 +245,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     raise RuntimeError("invokedynamic arguments are not 0")
                 dynamic_cp = from_cp(clazz.constant_pool, cp_index)
                 assert dynamic_cp['tag'] == Constant.CONSTANT_InvokeDynamic.name, "invokedynamic index is not CONSTANT_InvokeDynamic"
-               
+
                 name_and_type = from_cp(clazz.constant_pool, dynamic_cp['name_and_type_index'])
                 method_name = clazz.constant_pool[name_and_type['name_index']-1]['bytes'].decode('utf-8')
                 method_signature = clazz.constant_pool[name_and_type['descriptor_index']-1]['bytes'].decode('utf-8')
@@ -172,7 +253,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 bootstrap_method_attr = from_bsm(clazz, dynamic_cp['bootstrap_method_attr_index'])
                 print('bootstrap_method_attr', bootstrap_method_attr)
                 class_index = from_cp(clazz.constant_pool, from_cp(clazz.constant_pool, bootstrap_method_attr['bootstrap_method_ref'])['reference_index'])['class_index']
-                class_name = get_name_of_class(clazz.constant_pool, class_index)
+                class_name = get_name_of(clazz.constant_pool, class_index)
                 referenced_class = loaded_classes[class_name]
                 print(f"invokedynamic {class_name} | {method_name} | {method_signature}")
                 key = (method_name, method_signature)
@@ -188,7 +269,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 static_cp = from_cp(clazz.constant_pool, cp_index)
                 assert static_cp['tag'] == Constant.CONSTANT_Methodref.name, "invokestatic index is not CONSTANT_Methodref"
                 class_index = static_cp['class_index']
-                class_name = get_name_of_class(clazz.constant_pool, class_index)
+                class_name = get_name_of(clazz.constant_pool, class_index)
                 referenced_class = loaded_classes[class_name]
                 name_and_type = from_cp(clazz.constant_pool, static_cp['name_and_type_index'])
                 method_name = clazz.constant_pool[name_and_type['name_index']-1]['bytes'].decode('utf-8')
@@ -207,7 +288,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                     assert v.type == arg_type, f"invokestatic argument type mismatch: expected {arg_type}, got {v.type}"
                     args.append(v)
                 # run the method
-                ret = execute_method(clazz, loaded_classes, code_attr['info'], passed_vars=args)
+                ret = execute_method(clazz, loaded_classes, code_attr['info'], runtime_classes, passed_vars=args)
 
                 operations_count += ret.op_count
                 # push return value to stack
@@ -224,6 +305,8 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
             elif Opcode.sipush == opcode:
                 short = parse_i2(f)
                 frame.stack.append(Operand(type=OperandType.INT, value=short))
+            elif Opcode.pop == opcode:
+                frame.stack.pop()
             elif Opcode.i2f == opcode:
                 operand = pop_expected(frame.stack, OperandType.INT)
                 frame.stack.append(Operand(type=OperandType.FLOAT, value=float(operand.value)))
@@ -427,6 +510,22 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
                 return ExecutionReturnInfo(op_count=operations_count)
             elif Opcode.nop == opcode:
                 pass
+            elif Opcode.putstatic == opcode:
+                index = parse_i2(f)
+                fieldref = from_cp(clazz.constant_pool,  index)
+                name_of_class = get_name_of(clazz.constant_pool, fieldref['class_index'])
+                name_of_member = get_name_of(clazz.constant_pool, fieldref['name_and_type_index'])
+                signature_or_type = get_type_of_member(clazz.constant_pool, fieldref['name_and_type_index'])
+                initialize_runtime_class(clazz, loaded_classes, runtime_classes)
+                
+                value = frame.stack.pop()
+                # Put the value in the static field
+                if name_of_class not in runtime_classes:
+                    raise RuntimeError(f"Class {name_of_class} not initialized")
+                runtime_class = runtime_classes[name_of_class]
+                if name_of_member not in runtime_class.static_fields:
+                    raise RuntimeError(f"Field {name_of_member} not initialized")
+                runtime_class.static_fields[name_of_member] = value
             else:
                 raise NotImplementedError(f"Opcode {opcode} is not implemented")
             
@@ -439,6 +538,7 @@ def execute_method(clazz : JVMClassFile, loaded_classes : Dict[str, JVMClassFile
 
 def run_class_main(main_class : JVMClassFile, loaded_classes : Dict[str, JVMClassFile]):
     assert main_class.methods is not None, "Main class has no methods"
+    runtime_classes : Dict[str, RuntimeClass] = {}
     for method in  main_class.methods:
         method_name = from_cp(main_class.constant_pool, method['name_index'])['bytes'].decode('utf-8')
         if method_name not in ('main'): continue    # NOTE: should we run some (static) init method?
@@ -448,7 +548,7 @@ def run_class_main(main_class : JVMClassFile, loaded_classes : Dict[str, JVMClas
                 code_attr = attr['info']
                 assert 'code' in code_attr, "Code attribute has no code"
                 start_timer = perf_counter_ns()
-                exec_info = execute_method(main_class, loaded_classes, code_attr, has_this=method_name == '<init>')
+                exec_info = execute_method(main_class, loaded_classes, code_attr, runtime_classes, has_this=method_name == '<init>')
                 end_timer = perf_counter_ns()
                 print(f"   Executed {exec_info.op_count} operations in {(end_timer - start_timer) / 1000000:.2f} ms")
 
@@ -491,10 +591,13 @@ if __name__ == '__main__':
     
     main_class, loaded_classes = load_class_from_file(file_path)
     
-    #print_constant_pool(main_class.constant_pool, expand=False)
-    #print('Attributes:')
-    #pprint(clazz.attributes)
-    #print('Methods:')
-    #pprint(clazz.methods)
+    
+    #print_constant_pool(main_class.constant_pool, expand=True)
+    '''
+    print('Attributes:')
+    pprint(main_class.attributes)
+    print('Methods:')
+    pprint(main_class.methods)
+    '''
     
     run_class_main(main_class, loaded_classes)

@@ -19,6 +19,7 @@ class JVMClassFile:
     super_class : int
     interfaces : List[dict]
     fields : List[dict]
+    fields_lookup : dict
 
 class AttributeInfoName(Enum):
     BOOTSTRAP_METHOD = b'BootstrapMethods'
@@ -35,11 +36,19 @@ class AttributeInfoName(Enum):
     EXCEPTIONS = b'Exceptions'
     NEST_MEMBERS = b'NestMembers'
 
-def get_name_of_class(constant_pool : List[dict], class_index: int) -> str:
-    return constant_pool[constant_pool[class_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+def get_name_of(constant_pool : List[dict], index: int) -> str:
+    constant = from_cp(constant_pool, index)
+    if 'bytes' in constant:
+        return constant['bytes'].decode('utf-8')
+    index_to_name = constant['name_index']
+    return from_cp(constant_pool, index_to_name)['bytes'].decode('utf-8')
 
-def get_name_of_member(constant_pool : List[dict], name_and_type_index: int) -> str:
-    return constant_pool[constant_pool[name_and_type_index - 1]['name_index'] - 1]['bytes'].decode('utf-8')
+def get_type_of_member(constant_pool : List[dict], name_and_type_index: int) -> str:
+    constant = from_cp(constant_pool, name_and_type_index)
+    if 'bytes' in constant:
+        return constant['bytes'].decode('utf-8')
+    index_to_descriptor = constant['descriptor_index']
+    return from_cp(constant_pool, index_to_descriptor)['bytes'].decode('utf-8')
 
 CACHED_ATTR_INSTANCES = {}
 
@@ -143,7 +152,7 @@ def parse_attribute_info_InnerClasses(constant_pool : List[dict], f : io.BytesIO
     attr = {}
     attr['number_of_classes'] = parse_i2(f)
     classes = []
-    for i in range(attr['number_of_classes']):
+    for _ in range(attr['number_of_classes']):
         cls = {}
         cls['inner_class_info_index'] = parse_i2(f)
         cls['outer_class_info_index'] = parse_i2(f)
@@ -447,9 +456,17 @@ def parse_class_file(file_path : str) -> JVMClassFile:
             methods.append(method)
             methods_lookup[lookup_key] = method
         
+        fields_lookup = {}
+        for field in fields:
+            name_index = field['name_index']
+            field['name'] = constant_pool[name_index - 1]['bytes'].decode('utf-8')
+            descriptor_index = field['descriptor_index']
+            field['descriptor'] = constant_pool[descriptor_index - 1]['bytes'].decode('utf-8')
+            fields_lookup[field['name'], field['descriptor']] = field
+        
         attributes_count = parse_i2(f)
         attributes = parse_attributes(constant_pool, f, attributes_count)
-        return JVMClassFile(version, constant_pool, methods, methods_lookup, attributes, access_flags, this_class, super_class, interfaces, fields)
+        return JVMClassFile(version, constant_pool, methods, methods_lookup, attributes, access_flags, this_class, super_class, interfaces, fields, fields_lookup)
 
 def find_methods_by_name(clazz : JVMClassFile, name: bytes):
     assert clazz.methods is not None, "Class methods not parsed"

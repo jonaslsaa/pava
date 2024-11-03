@@ -66,6 +66,8 @@ class Opcode(Enum):
     sipush = 0x11
     nop = 0x0
     
+    pop = 0x57
+    
     ireturn = 0xAC
     freturn = 0xAE
     areturn = 0xB0
@@ -142,3 +144,5 @@ class Opcode(Enum):
     
     newarray = 0xBC
     arraylength = 0xBE
+    
+    putstatic = 0xB3
