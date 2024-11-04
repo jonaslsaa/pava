@@ -582,9 +582,12 @@ def load_class_from_file(file_path : str) -> Tuple[JVMClassFile, Dict[str, JVMCl
                 if 'String' not in class_name:
                     continue # NOTE: skip java classes for now
             
-            all_classes[class_name] = parse_class_file(path_prefix + class_name + '.class')
+            _, all_classes_from_current = load_class_from_file(path_prefix + class_name + '.class')
+            for k, v in all_classes_from_current.items():
+                assert k not in all_classes, f"Duplicate class {k}"
+                print(f"    Loaded referenced class {k}")
+                all_classes[k] = v
             print("Loaded class:", class_name)
-            #pprint(all_classes[name_index])
     return main_class, all_classes
 
 if __name__ == '__main__':

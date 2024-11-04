@@ -411,6 +411,7 @@ def parse_fields(constant_pool, f, fields_count):
     return fields
 
 def parse_class_file(file_path : str) -> JVMClassFile:
+    print("Loading class file:", file_path)
     with open(file_path, "rb") as f:
         magic = hex(parse_i4(f))
         if magic != '0xcafebabe':
